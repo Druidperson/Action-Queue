@@ -1370,11 +1370,15 @@ export function setup(ctx) {
 
     // time (ms) to get n of an item from scratch with things the queue can do itself; Infinity if it can't.
     // Also returns the XP those steps give in `skillId` (smelting bars trains Smithing too).
+    // average ms per item from another mod part's drop source (Township part: monster drops, gems, Stardust), worked out
+    // once a second since the planner asks often
+    const dropMs = (item) => perSec(`drop|${item.id}`, () => { for (const fn of SOURCES) { try { const x = fn(item, 1); if (x?.unitMs > 0) return x.unitMs; } catch (e) { /* no source */ } } return 0; });
     const makeTime = (item, n, lv, skillId, seen = new Set(), depth = 0) => {
       if (!(n > 0)) return { ms: 0, xp: 0 };
       const NO = { ms: Infinity, xp: 0 }, c = crafter(item.id), g = !c && gatherer(item.id), x = c || g;
-      // buying from the shop takes no time (you still confirm each purchase)
-      if (!x) return buyLeft(item) >= n ? { ms: 0, xp: 0 } : NO;
+      // buying from the shop takes no time (you still confirm each purchase); a drop (seeds from a monster, say) takes its
+      // average time per item
+      if (!x) { if (buyLeft(item) >= n) return { ms: 0, xp: 0 }; const u = dropMs(item); return u > 0 ? { ms: u * n, xp: 0 } : NO; }
       if (depth > 10 || seen.has(item.id) || !x || x.a.level > levelIn(x.skill, lv) || x.a.need?.(lv)) return NO;
       if (g) { const acts = n / Math.max(1, g.a.qty); return { ms: acts * g.a.ms, xp: g.skill.id === skillId ? acts * g.a.xp : 0 }; }
       const opt = c.a.options[0], crafts = n / perAttempt(c.a, opt); // attempts, not rounded: ranks methods by their steady rate
