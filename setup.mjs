@@ -379,6 +379,9 @@ export function setup(ctx) {
     if (e.wasSet === undefined || !pl || pl.selectedEquipmentSet === e.wasSet || game.activeAction === game.combat) return;
     try { pl.changeEquipmentSet(e.wasSet); } catch (err) { console.warn(TAG, "switching your equipment set back", err); }
   };
+  const kills = (id) => { try { return game.stats.monsterKillCount(game.monsters.getObjectByID(id)) ?? 0; } catch (e) { return 0; } };
+  // the fight a kill or drop step uses: any combat area or Slayer area the monster is in (null for dungeons)
+  const fightId = (m) => { const a = [...list(game.combatAreas), ...list(game.slayerAreas)].find((x) => (x.monsters ?? []).includes(m)); return a ? `fight:${a.id}:${m.id}` : null; };
   const fighting = (m) => game.activeAction === game.combat && game.combat.selectedMonster === m;
   const startFight = (skill, m, area) => {
     const pl = player(), style = styleFor(skill), pr = skill.id === PRAYER && bestPrayer();
@@ -657,9 +660,10 @@ export function setup(ctx) {
   const askIcon = (e) => { try { const t = ASKS[e.what]?.target(e); return e.what === "buy" ? t?.it : e.what === "slayer" ? skillById(SLAYER) : t; } catch (err) { return null; } };
 
   // ---------- queue (saved locally, one list per character name) ----------
+  // kill fights a monster until you've beaten it enough more times (Township monster tasks),
   // gather and craft run a game action until you have more of an item, skill runs one until it has given enough XP,
   // manual waits for the player, train plans the next batch of steps
-  const KINDS = new Set(["gather", "craft", "skill", "manual", "train", "ask"]);
+  const KINDS = new Set(["gather", "craft", "skill", "manual", "train", "ask", "kill"]);
   const Queue = {
     items: [],
     key: () => `aq-queue:${game.characterName ?? "default"}`,
@@ -710,7 +714,7 @@ export function setup(ctx) {
   };
   const startAction = (e) => {
     const skill = skillById(e.skillId), m = methodById(skill, e.actionId), safety = m?.safe?.();
-    if (!m) return fail("this action wasn't found in your game version");
+    if (!m) return fail(e.kind === "kill" ? "this monster is in a dungeon or special area, so fight it yourself, then press Start" : "this action wasn't found in your game version");
     if (m.level > skill.level) return fail(`needs ${nm(skill)} level ${m.level}`);
     if (m.need?.()) return fail(m.need());
     if (safety && !safety.ok) return fail(`not safe while you're away: ${safety.why}`);
@@ -775,8 +779,8 @@ export function setup(ctx) {
     sideJob(top) {
       if (!(top?.readyAt > Date.now()) || this.state !== "running" || !Settings.get("sideJobs")) return null;
       return Queue.items.slice(Queue.items.indexOf(top) + 1).find((e) => {
-        const m = e.status !== "done" && e.status !== "blocked" && (e.kind === "gather" || e.kind === "skill") && methodById(skillById(e.skillId), e.actionId);
-        return m && !m.tick && (e.kind === "gather" || !m.options[0].costs.length);
+        const m = e.status !== "done" && e.status !== "blocked" && ["gather", "skill", "kill"].includes(e.kind) && methodById(skillById(e.skillId), e.actionId);
+        return m && !m.tick && (e.kind !== "skill" || !m.options[0].costs.length);
       }) ?? null;
     },
     doFirst(id) {
@@ -787,7 +791,7 @@ export function setup(ctx) {
       if (this.state === "running") { this.step(); Panel.render(); } else this.start();
     },
     // what a step counts: XP for skill steps, otherwise how many of its item you own
-    value: (e) => (e.kind === "skill" ? Math.floor(skillById(e.skillId)?.xp ?? 0) : owned(itemById(e.itemId))),
+    value: (e) => (e.kind === "skill" ? Math.floor(skillById(e.skillId)?.xp ?? 0) : e.kind === "kill" ? kills(e.monsterId) : owned(itemById(e.itemId))),
     gained(e) { return e.kind === "train" ? Math.floor(skillById(e.skillId)?.xp ?? 0) : e.startQty === undefined ? 0 : Math.max(0, this.value(e) - e.startQty); },
     // what runs a step in the game: the skill, or combat for a fight
     actorOf: (e) => methodById(skillById(e.skillId), e.actionId)?.actor ?? skillById(e.skillId) ?? null,
@@ -1199,7 +1203,7 @@ export function setup(ctx) {
   // ---------- floating panel ----------
   const POS_KEY = "aq-panel-pos";
   const levelIssue = (e) => {
-    const sk = skillById(e.skillId), m = ["craft", "gather", "skill"].includes(e.kind) && methodById(sk, e.actionId);
+    const sk = skillById(e.skillId), m = ["craft", "gather", "skill", "kill"].includes(e.kind) && methodById(sk, e.actionId);
     return m && m.level > sk.level ? `Needs ${nm(sk)} level ${m.level} (you have ${sk.level})` : null;
   };
   const toggleSetting = (name) => { Settings.set(name, !Settings.get(name)); Panel.last = ""; Panel.render(); };
@@ -1244,7 +1248,7 @@ export function setup(ctx) {
         : '<i class="fa fa-circle mr-2" style="opacity:.25;font-size:8px;vertical-align:middle"></i>';
       const showProgress = !manual && !done && e.startQty !== undefined && (e.status === "active" || e.status === "blocked" || Runner.gained(e) > 0);
       const xpUnit = e.kind === "skill" ? " XP" : "";
-      const amount = e.kind === "ask" ? (e.what === "buy" ? `x${num(e.qty)}` : "") : isTrain ? `Level ${skillById(e.skillId)?.level ?? 0} / ${e.targetLevel}` : showProgress ? `${num(Runner.gained(e))} / ${num(e.qty)}${xpUnit}` : e.kind === "skill" ? `${num(e.qty)} XP` : `x${num(e.qty)}`;
+      const amount = e.kind === "ask" ? (e.what === "buy" ? `x${num(e.qty)}` : "") : isTrain ? (e.xpGoal ? `${num(Math.floor(skillById(e.skillId)?.xp ?? 0))} / ${num(e.targetXp)} XP` : `Level ${skillById(e.skillId)?.level ?? 0} / ${e.targetLevel}`) : showProgress ? `${num(Runner.gained(e))} / ${num(e.qty)}${xpUnit}` : e.kind === "skill" ? `${num(e.qty)} XP` : `x${num(e.qty)}`;
       const btn = (act, ic, title, cls = "text-white-50") => `<a data-act="${act}" data-id="${esc(e.id)}" class="pointer-enabled ${cls} ml-2" title="${title}"><i class="fa ${ic}"></i></a>`;
       const sub = done && e.sold ? small("text-muted", esc(e.sold)) : e.reason ? small("text-warning", esc(e.reason))
         : issue ? small("text-warning", `<i class="fa fa-exclamation-triangle"></i> ${esc(issue)}`)
@@ -1253,7 +1257,7 @@ export function setup(ctx) {
         : e.info && !done && (e.kind !== "ask" || e.status === "waiting") ? small("text-muted", esc(e.info))
         : e.kind === "ask" && !done ? small("text-muted", e.what === "equip" ? (e.set >= 0 ? "switches your equipment set" : "waits for you to equip it") : e.optional ? "optional, asks you first" : "asks you first") : "";
       return `<div style="display:flex;align-items:center;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.07);${done ? "opacity:.5" : ""}" ${manual ? `title="${esc(e.note ?? "")}"` : ""}>` +
-        `<div style="flex:1;min-width:0">${lead}${icon(isTrain ? skillById(e.skillId) : e.kind === "ask" ? askIcon(e) : e.kind === "skill" ? methodById(skillById(e.skillId), e.actionId) ?? skillById(e.skillId) : itemById(e.itemId))}<span class="${manual ? "text-muted font-italic" : ""}" style="${done ? "text-decoration:line-through" : ""}">${esc(e.label)}</span> <b>${amount}</b>` +
+        `<div style="flex:1;min-width:0">${lead}${icon(isTrain ? skillById(e.skillId) : e.kind === "ask" ? askIcon(e) : e.kind === "skill" || e.kind === "kill" ? methodById(skillById(e.skillId), e.actionId) ?? skillById(e.skillId) : itemById(e.itemId))}<span class="${manual ? "text-muted font-italic" : ""}" style="${done ? "text-decoration:line-through" : ""}">${esc(e.label)}</span> <b>${amount}</b>` +
         `${Runner.focusId === e.id ? ' <span class="badge badge-success">first</span>' : ""}${sub}</div>` +
         (done ? btn("remove", "fa-times", "Remove") : btn("first", "fa-play-circle", "Do this first (keeps its place in the list)", "text-success") +
           btn("top", "fa-angle-double-up", "Move to top") + btn("up", "fa-arrow-up", "Move up") + btn("down", "fa-arrow-down", "Move down") + btn("remove", "fa-times", "Remove")) + `</div>`;
@@ -1368,6 +1372,7 @@ export function setup(ctx) {
     queue: { items: () => Queue.items, add: (entries, top = false, skill) => addUnique(entries, top, skill), dupHtml, remove: (id) => Queue.remove(id) },
     runner: { start: () => Runner.start(), pause: (m) => Runner.pause(m), stop: () => Runner.stop(), get state() { return Runner.state; } },
     panel: { open: () => Panel.open(), close: () => Panel.close() },
+    fightId, HITPOINTS,
     addSource: (fn) => { if (typeof fn === "function") SOURCES.push(fn); },
     addButton, tell: tellPlayer,
     // for testing
