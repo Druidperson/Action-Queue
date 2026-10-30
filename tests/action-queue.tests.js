@@ -288,15 +288,20 @@
     swalButton(".swal2-cancel").click(); await sleep(600);
     eq(items()[0].status, "done"); eq(items()[0].sold, "Skipped");
   }));
-  test(AS, "the Agility builder asks before building", () => sandbox(async () => {
-    const picks = S().plan.agilityPicks();
-    if (!picks.length) skip("no empty Agility slot you can fill");
-    add(S().plan.buildSteps(picks.slice(0, 1)));
-    A().runner.start(); await waitFor(swalOpen, 4000);
-    const title = swalTitle() ?? "";
-    if (/Agility obstacle/.test(title)) { swalButton(".swal2-cancel").click(); await sleep(500); return; }
-    // not enough to pay: it gathers or blocks with a reason instead
-    ok(items().length > 1 || items()[0].reason, `nothing happened: ${R().message}`);
+  test(AS, "the Agility builder asks before building, and Skip spends nothing", () => sandbox(async () => {
+    // a full course is hidden from the builder for the test only (in memory), so there's always a slot to offer
+    const built = game.agility.activeCourse.builtObstacles, saved = [...built.entries()];
+    try {
+      built.clear();
+      const picks = S().plan.agilityPicks();
+      if (!picks.length) skip("no Agility obstacle you can build");
+      add(S().plan.buildSteps(picks.slice(0, 1)));
+      const gp = game.gp.amount;
+      A().runner.start(); await waitFor(() => /Agility obstacle/.test(swalTitle()), 4000, 100); await sleep(500);
+      has(swalTitle(), "Build an Agility obstacle"); has(SwalLocale.getPopup().textContent, "can't be undone");
+      swalButton(".swal2-cancel").click(); await sleep(800);
+      eq(items()[0].sold, "Skipped"); eq(game.gp.amount, gp, "GP spent"); eq(built.size, 0, "something was built");
+    } finally { for (const [k, v] of saved) built.set(k, v); }
   }));
 
   // =================================================================================================================
@@ -472,6 +477,50 @@
     A().runner.stop(); await sleep(300);
     eq(pl.selectedEquipmentSet, mine, "set after the second Stop");
   }), { live: true });
+
+  // =================================================================================================================
+  const MX = "More skills";
+  test(MX, "Farming waits for crops, works on the next step meanwhile, then harvests", () => sandbox(async () => {
+    liveOk();
+    const f = game.farming, pot = item("melvorD:Potatoes");
+    const plot = list(f.plots).find((p) => p.category?.id === "melvorD:Allotment" && p.state !== 0);
+    if (!plot) skip("no unlocked Allotment plot");
+    if (plot.state === 1 && have("melvorD:Potato_Seed") < 3) skip("needs 3 Potato Seeds to plant");
+    if (plot.state === 2 && plot.plantedRecipe?.product !== pot) skip("the plot is growing something else");
+    const origChance = f.getPlotGrowthChance;
+    A().settings.set("sideJobs", true); A().settings.set("autoBuy", false);
+    try {
+      f.getPlotGrowthChance = () => 100;
+      add([{ kind: "craft", skillId: "melvorD:Farming", actionId: "melvorD:Potatoes", itemId: "melvorD:Potatoes", altIndex: 0, qty: 1, label: "Farming: make Potatoes" }, logStep(200)]);
+      A().runner.start(); await sleep(1500);
+      if (swalOpen()) { swalButton(".swal2-cancel")?.click(); await sleep(800); } // compost offer
+      ok(plot.state === 2 || plot.state === 3, `nothing planted (plot state ${plot.state}): ${items()[0].reason ?? R().message}`);
+      if (plot.state === 2) { eq(game.activeAction?.id, "melvorD:Woodcutting", "should cut logs while the crop grows"); try { f.growthTimerMap.get(plot)?.start(200); } catch (e) { /* ignore */ } }
+      await waitFor(() => plot.state === 3, 5000);
+      items()[0].readyAt = Date.now() - 1; // as if the wait had passed
+      ok(await waitFor(() => items()[0].status === "done", 10000), `didn't harvest: ${items()[0].info ?? items()[0].reason ?? R().message}`);
+    } finally { f.getPlotGrowthChance = origChance; }
+  }), { live: true });
+  test(MX, "Alt Magic casts on something the queue can make and reaches the goal", () => sandbox(async () => {
+    liveOk();
+    const mg = skill("Magic"), c = S().plan.trainPlan(mg, mg.level + 1, null).batches[0]?.c;
+    if (!c || !c.opt?.costs?.length) skip("no Alt Magic method at this level");
+    for (const k of c.opt.costs) give(k.item.id, k.quantity * 10);
+    const xp0 = Math.floor(mg.xp), xpEach = c.a.baseExperience ?? c.a.xp ?? 5;
+    add([{ kind: "train", skillId: mg.id, targetLevel: mg.level + 1, targetXp: xp0 + xpEach, qty: xp0 + xpEach, label: "Magic: one cast" }]);
+    ok(await runUntil(() => items().find((e) => e.kind === "train")?.status === "done", 20000), `${items().map((e) => e.label + " " + e.status + " " + (e.reason ?? "")).join("; ")} ${R().message}`);
+  }), { live: true });
+  test(MX, "Stardust plans an Astrology step with a constellation picker", () => sandbox(async () => {
+    const it = item("melvorF:Stardust"); if (!it) skip("no Stardust in this game");
+    const e = T()._dev.dropEntry(it, 5); ok(e, "no step"); eq(e.skillId, "melvorD:Astrology");
+    await closeSwal(); T().showItem(it.id, have(it) + 5); await waitFor(() => /Stardust/.test(swalTitle()), 4000, 100); await sleep(400);
+    ok(SwalLocale.getPopup().querySelector("[data-mbd-astro]"), "no constellation picker");
+  }));
+  test(MX, "Thieving only picks a target that's safe", () => {
+    const sk = skill("Thieving"), p = S().plan.trainPlan(sk, sk.level + 1, null);
+    if (!p.batches.length) { ok(S().plan.blockedWhy(sk), "no plan and no reason"); return; }
+    const m = S().skills.methodById(sk, p.batches[0].c.a.id); ok(!m?.safe || m.safe().ok !== false, "picked an unsafe target");
+  });
 
   // =================================================================================================================
   const PN = "Panel";
