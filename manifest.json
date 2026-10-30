@@ -1,0 +1,4 @@
+{
+  "namespace": "actionQueue",
+  "setup": "setup.mjs"
+}
