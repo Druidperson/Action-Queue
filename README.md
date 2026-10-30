@@ -1,48 +1,44 @@
 # Action Queue
 
-One queue for your Melvor Idle mods. Skill Trainer and Township Task Helper plan the work and hand it to Action Queue, which runs it one step after another while you're away. There's only ever one queue and one panel.
+A to-do list for Melvor Idle that actually does the work. Line up a bunch of steps, press Start and go to bed. The queue runs them one after another and picks up where it left off.
 
 ## Getting started
 
-Install Action Queue with Skill Trainer, which knows how to train each skill. Township Task Helper is optional and needs both. Action Queue adds a list button to the bottom-right menu. That's your queue. Add steps from the other mods, press Start and walk away.
+Action Queue adds a list button to the bottom-right menu. That's your queue. Steps get added by other mods (Skill Trainer is the main one), so install one of those too. On its own, Action Queue can only hold steps you do yourself.
 
-## What it runs
+Once there's something in the list, press Start and walk away.
 
-Anything Skill Trainer knows how to do: gathering, crafting, training to a level or an XP amount, fights, Farming, Agility, Cartography, Archaeology and more. If a step runs short on materials, it goes back and gets more. If it needs something it can't get on its own, it waits for you with a note saying what to do.
+## The panel
 
-## Your settings
+- Start, pause, resume and stop
+- See how long is left and roughly when it'll be done
+- Move steps up, down or to the top, or remove them
+- Do this first runs a step right away without moving it in the list
+- Clear Queue removes finished steps, Clear All empties the list
+- Drag the panel anywhere, it remembers where you put it
+
+Your queue is saved per character, so it's still there after a reload.
+
+## Settings
 
 - Auto-start begins the queue as soon as you add something
 - Auto-sell sells the extras a step makes, never anything you already owned
-- Auto-buy buys feathers, shards and compost from the shop without asking
-- Work on other steps while crops grow
+- Buy from the shop without asking, for things like feathers, shards and compost
+- Work on other steps while crops grow, then come back for the harvest
 
-All four are in the mod settings, and the first three are buttons on the panel too.
+All four are in the mod settings, and the first three are buttons at the top of the panel too.
 
 ## It asks before spending
 
-Some steps cost something or change your game, so the queue stops and asks first:
+Anything that costs something stops and asks you first, with a Skip button if you'd rather not. The only exception is shop purchases when you turn on "Buy from the shop without asking". That one's off by default.
 
-- Buying feathers, compost or shards from the shop
-- Building an Agility obstacle
-- Rolling a Slayer task
-- Making a dig site map
+## When it needs you
 
-Press Skip and it carries on without it. If you'd rather not click for shop purchases, turn on "Buy from the shop without asking" in the mod settings or with the cart button on the panel.
-
-## Safe while you're away
-
-Fights only run when they're safe with nobody watching. That means food equipped, auto eat set to start above the monster's biggest hit, and a monster that can't take half your HP in one go. If your food gets low, the queue stops before it runs out.
-
-## Small things that save time
-
-- Drag the panel anywhere, reorder steps, pause and resume
-- Do this first runs a step right away without moving it in the list
-- While crops grow, it works on other steps and comes back for the harvest
+If a step needs something the queue can't get on its own, it waits and tells you what to do. Get it, and the queue carries on by itself.
 
 ## For mod makers
 
-Other mods can add steps through `mod.api.actionQueue`. Look at Skill Trainer for an example.
+Other mods can add steps through `mod.api.actionQueue` (or `window.actionQueue`). The API covers adding and removing steps, starting and stopping the runner, settings, shop helpers, ask steps and adding your own button next to the queue button. To run steps that aren't manual, register a trainer with `setTrainer`. Skill Trainer is a full example.
 
 ## Bugs and ideas
 
