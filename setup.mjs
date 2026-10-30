@@ -1842,7 +1842,13 @@ export function setup(ctx) {
     try {
       if (a.realm && a.realm.id !== MELVOR_REALM) return out;
       const mods = () => game.modifiers ?? {};
-      if (skill.id === "melvorD:Mining" && a.giveGems && game.randomGemTable?.drops) {
+      // byproducts: Firemaking gives Ash, Charcoal (and Coal) as you burn logs, Cooking sometimes makes a Perfect dish.
+      // These steps use up logs or raw food, and get more when they run out like any crafting step.
+      if (skill.id === "melvorD:Firemaking" && Array.isArray(a.primaryProducts)) {
+        for (const it of a.primaryProducts) if (it?.id) out.push({ id: it.id, pct: () => { try { const r = skill.getPrimaryProductInfo(it, a); return Number(r.chance) * Math.max(1, Number(r.quantity) || 1); } catch (e) { return 0; } } });
+      } else if (skill.id === "melvorD:Cooking" && a.perfectItem?.id) {
+        out.push({ id: a.perfectItem.id, pct: () => { try { return Number(skill.getRecipePerfectChance(a)) * succ(skill, a); } catch (e) { return 0; } } });
+      } else if (skill.id === "melvorD:Mining" && a.giveGems && game.randomGemTable?.drops) {
         const tw = game.randomGemTable.totalWeight || game.randomGemTable.drops.reduce((t, d) => t + d.weight, 0);
         for (const d of game.randomGemTable.drops) if (d?.item) out.push({ id: d.item.id, pct: () => (1 + Number(mods().miningGemChance ?? 0)) * (1 + Number(mods().offItemChance ?? 0) / 100) * (d.weight / tw) });
       } else if (skill.id === "melvorD:Thieving") {
