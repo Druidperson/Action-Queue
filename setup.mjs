@@ -1185,7 +1185,8 @@ export function setup(ctx) {
       const base = { itemId: n.item.id, qty: n.qty }, c = n.recipe?.c, g = !c && gatherer(n.item.id);
       if (c) return [...(c.skill.id === FARMING ? plotAsk(c.skill, c.a.a) : []), { ...base, kind: "craft", skillId: c.skill.id, actionId: c.a.id, altIndex: 0, label: `${nm(c.skill)}: make ${nm(n.item)}` }];
       if (g) return { ...base, kind: "gather", skillId: g.skill.id, actionId: g.a.id, label: `${nm(g.skill)}: gather ${nm(n.item)}` };
-      for (const fn of SOURCES) { const x = fn(n.item, n.qty); if (x) return { ...base, ...x }; }
+      // a source can need steps first (the Bird Nests to open, say)
+      for (const fn of SOURCES) { const x = fn(n.item, n.qty); if (x) { const { before, ...rest } = x; return [...(before ?? []), { ...base, ...rest }]; } }
       // qty for a buy step is how many you should own, like a manual step
       if (shopOnly(n.item)) return { ...base, qty: owned(n.item) + n.qty, kind: "ask", what: "buy", label: `Buy ${nm(n.item)}` };
       return { ...base, qty: n.need ?? n.qty, kind: "manual", label: `Get ${nm(n.item)}`, note: MANUAL_NOTE };
@@ -1898,7 +1899,7 @@ export function setup(ctx) {
   let idx = null;
   const buildIndex = () => {
     if (idx) return idx;
-    idx = { crafters: new Map(), gatherers: new Map(), randoms: new Map(), droppers: new Map(), shop: new Map() };
+    idx = { crafters: new Map(), gatherers: new Map(), randoms: new Map(), droppers: new Map(), shop: new Map(), openers: new Map() };
     for (const skill of list(game.skills)) {
       if (skill.id === MAGIC_ID) decorateSpells(skill);
       if (skill.id === "melvorD:Herblore") decorateHerblore(skill);
@@ -1908,7 +1909,19 @@ export function setup(ctx) {
         for (const rp of a.randomProducts ?? []) if (rp?.id) push(idx.randoms, rp.id, { skill, a });
         if (skill.id === ASTRO_ID && (!a.realm || a.realm.id === MELVOR_REALM)) for (const ri of a.randomItems ?? []) if (ri?.id) push(idx.randoms, ri.id, { skill, a });
         for (const x of specialDrops(skill, a)) push(idx.randoms, x.id, { skill, a, pct: x.pct });
+        // Thieving: a successful pickpocket rolls the target's loot table 75% of the time
+        if (skill.id === THIEVING_ID && a.lootTable) {
+          const drops = a.lootTable.drops ?? [], tw = Number(a.lootTable.totalWeight) || drops.reduce((t, d) => t + (d.weight || 0), 0);
+          for (const d of drops) if (d?.item && tw > 0) push(idx.randoms, d.item.id, { skill, a, thieve: true,
+            pct: () => (Number(skill.getNPCSuccessRate?.(a)) || 0) * ((skill.itemChance ?? 75) / 100) * (d.weight / tw) * (((d.minQuantity ?? 1) + (d.maxQuantity ?? 1)) / 2) });
+        }
       }
+    }
+    // things you open (Bird Nests, Herb Sacks, Stacks of Bones): what each one gives on average. Ones that need a key are left out.
+    for (const o of list(game.items)) {
+      const drops = o.dropTable?.drops ?? [], tw = Number(o.dropTable?.totalWeight) || drops.reduce((t, d) => t + (d.weight || 0), 0);
+      if (!drops.length || !(tw > 0) || o.keyItem) continue;
+      for (const d of drops) if (d?.item) push(idx.openers, d.item.id, { o, per: (d.weight / tw) * (((d.minQuantity ?? 1) + (d.maxQuantity ?? 1)) / 2) });
     }
     for (const m of list(game.monsters)) {
       const drops = m.lootTable?.drops ?? m.lootTable?._drops ?? [];
@@ -1994,7 +2007,7 @@ export function setup(ctx) {
 
   // ---------- Astrology: Stardust and Golden Stardust are random drops from studying a constellation ----------
   // Each constellation also boosts other skills, so the player picks one on purpose or lets the mod take the best XP per hour.
-  const ASTRO_ID = "melvorD:Astrology";
+  const ASTRO_ID = "melvorD:Astrology", THIEVING_ID = "melvorD:Thieving";
   const Astro = { pick: "best" }; // "best" or a constellation id; reset whenever a popup opens
   const astroSkill = () => skillById(ASTRO_ID);
   const astroCons = (item) => {
@@ -2057,7 +2070,9 @@ export function setup(ctx) {
       if (!(chance > 0)) { try { chance = Number(x.skill.randomProducts?.get?.(item)?.chance ?? 0); } catch (e) { /* ignore */ } }
       if (!(chance > 0)) continue;
       const ms = intervalMs(x.skill, x.a);
-      out.push({ type: "skill", skill: x.skill, a: x.a, id: "s:" + x.a.id, open: (x.a.level ?? 1) <= x.skill.level, level: x.a.level ?? 1,
+      // a Thieving target only counts when the queue would really run it (safe while you're away)
+      const safeOk = !x.thieve || (() => { try { return st()?.skills.methodById(x.skill, x.a.id)?.safe?.().ok !== false; } catch (e) { return false; } })();
+      out.push({ type: "skill", skill: x.skill, a: x.a, id: "s:" + x.a.id, open: (x.a.level ?? 1) <= x.skill.level && safeOk, level: x.a.level ?? 1,
         xpHr: ((x.a.baseExperience ?? 0) / ms) * 3600000, perHr: (3600000 / ms) * (chance / 100) });
     }
     return out.sort((a, b) => a.level - b.level);
@@ -2375,7 +2390,28 @@ export function setup(ctx) {
   };
   // A random drop runs as an Action Queue gather step: study a constellation, train a skill that drops it, or fight a monster
   // that drops it (safe fights only). unitMs is the average time per item, so the queue's time estimate is right.
+  // the best thing to open for an item: one the queue can get, ranked by time per item. Returns the steps that get the
+  // containers, then an "open" step.
+  const OPEN_DEPTH = { n: 0 };
+  const openEntry = (item, qty) => {
+    buildIndex();
+    if (OPEN_DEPTH.n > 0) return null; // no nests inside nests
+    let best = null;
+    OPEN_DEPTH.n++;
+    try {
+      for (const { o, per } of idx.openers.get(item.id) ?? []) {
+        if (!(per > 0) || o === item) continue;
+        const n = Math.max(1, Math.ceil(qty / per));
+        const g = st()?.items.gatherer(o.id), get = g ? { kind: "gather", skillId: g.skill.id, actionId: g.a.id, label: `${nm(g.skill)}: gather ${nm(o)}`, unitMs: g.a.ms / Math.max(1, g.a.qty) } : dropEntry(o, n);
+        if (!get || !(get.unitMs > 0)) continue;
+        const unitMs = get.unitMs / per;
+        if (!best || unitMs < best.unitMs) best = { unitMs, entry: { kind: "ask", what: "open", openId: o.id, openN: n, unitMs, label: `Open ${nm(o)} for ${nm(item)}`, before: [{ ...get, itemId: o.id, qty: n }] } };
+      }
+    } finally { OPEN_DEPTH.n--; }
+    return best?.entry ?? null;
+  };
   const dropEntry = (item, qty) => {
+    if (!isFarmItem(item) && !isAstroItem(item)) return openEntry(item, qty);
     if (isAstroItem(item)) {
       const ch = conChoice(item);
       if (ch) return { kind: "gather", skillId: ASTRO_ID, actionId: ch.c.id, unitMs: ch.perHr > 0 ? 3600000 / ch.perHr : undefined, label: `${nm(astroSkill())}: study ${nm(ch.c)} for ${nm(item)}` };
@@ -2384,7 +2420,7 @@ export function setup(ctx) {
     const o = farmPlan(item, false, qty).opt, fid = o?.type === "fight" && st()?.fightId(o.m);
     if (o?.type === "skill") return { kind: "gather", skillId: o.skill.id, actionId: o.a.id, unitMs: o.perHr > 0 ? 3600000 / o.perHr : undefined, label: `${nm(o.skill)}: ${nm(o.a)} for ${nm(item)}` };
     if (fid && o.safety.safe) return { kind: "gather", skillId: HITPOINTS, actionId: fid, unitMs: isFinite(o.ms) ? o.ms / Math.max(1, qty) : undefined, label: `Fight ${nm(o.m)} for ${nm(item)}` };
-    return null;
+    return openEntry(item, qty);
   };
 
   const AREA_KINDS = [
@@ -2790,6 +2826,16 @@ export function setup(ctx) {
     };
     // the queue can use what this mod knows about random drops when a recipe step runs short
     st().addSource((item, qty) => dropEntry(item, qty));
+    aq().addAsk("open", {
+      icon: (e) => itemById(e.openId),
+      target: (e) => { const o = itemById(e.openId); return o && { o }; },
+      done: () => null,
+      auto: () => true,
+      cannot: (e, t) => ((have(t.o) ?? 0) > 0 ? null : `you have no ${nm(t.o)} to open`),
+      act: (e, t) => { const n = Math.min(e.openN ?? 1, have(t.o) ?? 0); game.bank.processItemOpen(t.o, n); return `Opened ${num(n)} ${nm(t.o)}`; },
+      turn: (e, t) => `open ${nm(t.o)}.`,
+      hint: () => "opens them for you",
+    });
     refresh();
     window.townshipHelper = {
       version: VERSION,
