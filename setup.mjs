@@ -620,7 +620,7 @@ export function setup(ctx) {
       pop: (e, c) => {
         const t = slayerTier(), k = game.combat.slayerTask.getRollCosts(c), n = t?.c === c ? t : { mons: [], safe: [] };
         return { title: "Roll a Slayer task?", yes: "Roll", html: popHtml(c, chips(chip(`Costs ${esc(costText(costsOf(k)))}`), chip(`${n.safe.length} of ${n.mons.length} monsters are safe for you`, n.safe.length ? "ok" : "warn")),
-          "The task is random. If you get a monster that isn't safe while you're away, the queue trains in Slayer areas instead. Skip doesn't ask again for this goal.") };
+          "The task is random. If you get a monster that isn't safe while you're away, the queue skips it and uses a safe Slayer area if there is one. Skip doesn't ask again for this goal.") };
       },
     },
     map: {
