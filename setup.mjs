@@ -808,6 +808,9 @@ export function setup(ctx) {
     // you've unlocked, with seeds you own, waits, and harvests. One planting is one attempt; plots grow side by side.
     const PLOT = { empty: 1, growing: 2, grown: 3, dead: 4 };
     const openPlots = (f, r) => { let p = []; try { p = [...(f.getPlotsForCategory(r.category) ?? [])]; } catch (e) { /* use the list */ } return (p.length ? p : list(f.plots).filter((x) => x.category === r.category)).filter((x) => x.state !== 0); };
+    // the next locked plot of this kind you have the level for: a Farming step can ask to unlock it (it costs GP)
+    const lockedPlot = (f, r) => list(f.plots).find((x) => x.category === r.category && x.state === 0 && (x.level ?? 1) <= f.level && !((x.abyssalLevel ?? 0) > (f.abyssalLevel ?? 0)));
+    const plotCosts = (f, p) => costsOf(f.getPlotUnlockCosts(p));
     const growMs = (f, r) => { try { return f.modifyInterval(r.baseInterval, r) || r.baseInterval; } catch (e) { return r.baseInterval; } };
     const seedCost = (f, r) => { try { return f.getRecipeSeedCost(r); } catch (e) { return r.seedCost?.quantity ?? 1; } };
     // without compost a crop only grows about half the time, and a dead crop gives nothing. Compost you own goes on a plot
@@ -846,8 +849,8 @@ export function setup(ctx) {
       // XP per planting: base XP when planted (for some kinds), then base XP per crop (or once) when a grown crop is harvested.
       // The planner counts xp x succ as the average, so the planting part is divided back out.
       get xp() { const b = r.baseExperience ?? 0; return (r.category?.giveXPOnPlant ? b / this.succ : 0) + b * (r.category?.scaleXPWithQuantity ? r.baseQuantity ?? 1 : 1); },
-      get ms() { const n = openPlots(s, r).length; return n ? growMs(s, r) / n : Infinity; },
-      need: () => (openPlots(s, r).length ? null : `needs an unlocked ${nm(r.category)} plot`),
+      get ms() { const n = openPlots(s, r).length || (lockedPlot(s, r) ? 1 : 0); return n ? growMs(s, r) / n : Infinity; },
+      need: () => (openPlots(s, r).length || lockedPlot(s, r) ? null : `needs an unlocked ${nm(r.category)} plot`),
       tick: (e) => farmTick(s, r, e), start: () => fail("Farming steps plant and harvest instead"),
     });
     // Archaeology digs at sites that have a map with charges and tools picked. An Archaeology goal with no map offers to make
@@ -1177,9 +1180,10 @@ export function setup(ctx) {
     const SOURCES = [];
     // Queue entries: "kind" is what the runner does; qty is how many MORE of the item to end up with
     // (for "manual" entries it is how many you should own).
-    const toEntries = (rows) => rows.map((n) => {
+    const plotAsk = (f, r) => { const p = !openPlots(f, r).length && lockedPlot(f, r); return p ? [{ kind: "ask", what: "plot", skillId: f.id, actionId: p.id, qty: 1, label: `Farming: unlock a ${nm(r.category)} plot` }] : []; };
+    const toEntries = (rows) => rows.flatMap((n) => {
       const base = { itemId: n.item.id, qty: n.qty }, c = n.recipe?.c, g = !c && gatherer(n.item.id);
-      if (c) return { ...base, kind: "craft", skillId: c.skill.id, actionId: c.a.id, altIndex: 0, label: `${nm(c.skill)}: make ${nm(n.item)}` };
+      if (c) return [...(c.skill.id === FARMING ? plotAsk(c.skill, c.a.a) : []), { ...base, kind: "craft", skillId: c.skill.id, actionId: c.a.id, altIndex: 0, label: `${nm(c.skill)}: make ${nm(n.item)}` }];
       if (g) return { ...base, kind: "gather", skillId: g.skill.id, actionId: g.a.id, label: `${nm(g.skill)}: gather ${nm(n.item)}` };
       for (const fn of SOURCES) { const x = fn(n.item, n.qty); if (x) return { ...base, ...x }; }
       // qty for a buy step is how many you should own, like a manual step
@@ -1223,6 +1227,16 @@ export function setup(ctx) {
     // waits for you to equip the right weapon).
     const popHtml = (o, rows, foot) => step(`<div class="aq-title">${icon(o)}<b>${esc(nm(o))}</b></div>${rows}`) + note(foot);
     const ASKS = {
+      plot: {
+        icon: () => skillById(FARMING),
+        target: (e) => list(game.farming?.plots).find((x) => x.id === e.actionId),
+        done: (e, p) => (p.state !== 0 ? "Unlocked" : null),
+        cannot: (e, p) => (game.farming.level < (p.level ?? 1) ? `needs Farming level ${p.level}` : game.farming.getPlotUnlockCosts(p).checkIfOwned() ? null : `you can't pay for the plot right now (${costText(plotCosts(game.farming, p))})`),
+        act: (e, p) => { game.farming.unlockPlotOnClick(p); return p.state !== 0 ? "Unlocked" : { block: "the game didn't unlock the plot" }; },
+        turn: (e, p) => `confirm unlocking a ${nm(p.category)} plot, or skip it.`,
+        pop: (e, p) => ({ title: "Unlock a Farming plot?", yes: "Unlock", html: popHtml(skillById(FARMING), chips(chip(`${esc(nm(p.category))} plot`), chip(`Farming level ${p.level ?? 1}`)) +
+          chips(chip("<b>Costs</b>", "lbl"), chip(esc(costText(plotCosts(game.farming, p))))), "Unlocking can't be undone. Skip leaves it locked, and the Farming step after it waits for a plot.") }),
+      },
       build: {
         target: (e) => list(game.agility?.actions).find((x) => x.id === e.actionId),
         done: (e, o) => { const there = o.course?.builtObstacles?.get(o.category) ?? game.agility.activeCourse.builtObstacles.get(o.category); return there ? (there === o ? "Already built" : `Slot already has ${nm(there)}`) : null; },
