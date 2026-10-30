@@ -1343,7 +1343,7 @@ export function setup(ctx) {
         if (r) return r;
       } catch (err) { return fail("error: " + err.message); }
       if (m.active ? m.active() : skill.isActive) return { ok: true };
-      const costly = (m.options[e.altIndex ?? 0] ?? m.options[0]).costs.length > 0 && e.kind !== "gather";
+      const costly = (m.options[e.altIndex ?? 0] ?? m.options[0]).costs.length > 0 && (e.kind !== "gather" || e.yieldPer > 0);
       return fail(costly ? "not enough materials (or level too low)" : "the game wouldn't start it", { noMaterials: costly && m.level <= skill.level });
     };
 
@@ -1353,7 +1353,7 @@ export function setup(ctx) {
       const m = methodById(skillById(e.skillId), e.actionId), item = itemById(e.itemId), name = e.kind === "skill" ? m?.name : nm(item);
       if (!m || (e.kind !== "skill" && !item)) return fail("this action wasn't found in your game version");
       const opt = m.options[e.altIndex ?? 0] ?? m.options[0], remaining = e.qty - A.runner.gained(e);
-      const crafts = Math.max(1, Math.ceil(remaining / (e.kind === "skill" ? Math.max(1e-9, m.xp * m.succ) : perAttempt(m, opt))));
+      const crafts = Math.max(1, Math.ceil(remaining / (e.kind === "skill" ? Math.max(1e-9, m.xp * m.succ) : e.yieldPer > 0 ? e.yieldPer : perAttempt(m, opt))));
       const entries = materialSteps(opt.costs, crafts, e.parent ?? e.id);
       if (!entries) return fail(`${name} needs something the queue can't get on its own`);
       return entries.length ? { ok: true, entries, remaining, crafts, name } : fail("not enough materials (or level too low)");
@@ -2078,7 +2078,7 @@ export function setup(ctx) {
       const ms = intervalMs(x.skill, x.a);
       // a Thieving target only counts when the queue would really run it (safe while you're away)
       const safeOk = !x.thieve || (() => { try { return st()?.skills.methodById(x.skill, x.a.id)?.safe?.().ok !== false; } catch (e) { return false; } })();
-      out.push({ type: "skill", skill: x.skill, a: x.a, id: "s:" + x.a.id, open: (x.a.level ?? 1) <= x.skill.level && safeOk, level: x.a.level ?? 1,
+      out.push({ type: "skill", skill: x.skill, a: x.a, id: "s:" + x.a.id, open: (x.a.level ?? 1) <= x.skill.level && safeOk, level: x.a.level ?? 1, per: chance / 100,
         xpHr: ((x.a.baseExperience ?? 0) / ms) * 3600000, perHr: (3600000 / ms) * (chance / 100) });
     }
     return out.sort((a, b) => a.level - b.level);
@@ -2424,7 +2424,8 @@ export function setup(ctx) {
     }
     if (!isFarmItem(item)) return null;
     const o = farmPlan(item, false, qty).opt, fid = o?.type === "fight" && st()?.fightId(o.m);
-    if (o?.type === "skill") return { kind: "gather", skillId: o.skill.id, actionId: o.a.id, unitMs: o.perHr > 0 ? 3600000 / o.perHr : undefined, label: `${nm(o.skill)}: ${nm(o.a)} for ${nm(item)}` };
+    // yieldPer: how many each attempt gives, so a step that uses materials (burning logs for Ash) knows how many more to get
+    if (o?.type === "skill") return { kind: "gather", skillId: o.skill.id, actionId: o.a.id, unitMs: o.perHr > 0 ? 3600000 / o.perHr : undefined, yieldPer: o.per, label: `${nm(o.skill)}: ${nm(o.a)} for ${nm(item)}` };
     if (fid && o.safety.safe) return { kind: "gather", skillId: HITPOINTS, actionId: fid, unitMs: isFinite(o.ms) ? o.ms / Math.max(1, qty) : undefined, label: `Fight ${nm(o.m)} for ${nm(item)}` };
     return openEntry(item, qty);
   };
