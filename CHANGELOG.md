@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.0
+- Skill Trainer and Township Task Helper are part of Action Queue again. It's one mod now, so you only need this one. If you still have Skill Trainer or Township Task Helper installed, uninstall them, the queue tells you if it finds them.
+- Everything they did is still here: the Train window (chart button), the green play buttons on Township tasks, and the queue.
+- Your saved queue and the queue settings carry over. The "Prefer mastery XP" and "Fights don't need auto eat" switches might be back to off, so check them in the mod settings if you used them.
+- No more waiting a few seconds on load for the other mods, everything starts together.
+
 ## 1.2.0
 - Action Queue now only runs the queue: the list, the panel, auto-start, auto-sell, auto-buy and working on other steps while crops grow. Everything about how to train a skill moved to Skill Trainer, so training steps need Skill Trainer installed. Without it, those steps wait with a note.
 - The "Prefer mastery XP" setting moved to Skill Trainer.
