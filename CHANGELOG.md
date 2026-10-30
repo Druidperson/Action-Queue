@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.1.0
+- Monster tasks that aren't safe while you're away (Mumma Chicken, say, when it hits harder than where your auto eat starts) aren't flat out refused anymore. The task window says why, and you can tick "I'll stay and eat myself during this fight" to add it anyway. Add to queue stays off until you tick it. The queue then runs that fight without waiting for auto eat and gives you a heads up when it starts. If you don't eat in time you can die and lose an item, so only tick it if you'll be there.
+- A monster that can kill you in one hit from full HP, or having no food equipped, still can't be added.
+- Dungeon bosses work now. Mumma Chicken and other bosses run the whole dungeon from the first room instead of stopping with "the game wouldn't start it". The safety check counts every monster in the dungeon, and the time estimate counts full runs.
+- Level goals never pick a dungeon fight.
+- Fixed: the "Fights don't need auto eat" setting only changed what the task window said. The queue now follows it too.
+
 ## 2.0.1
 - Stopping the queue, or removing a goal, now switches you back to your own equipment set if the goal had switched it. Before, it only switched back once the goal was done, so clearing a Ranged goal halfway left you on the bow set. Press Start again and it switches back to the right set.
 - The queue panel fits on narrow screens and phones now instead of running off the left side.

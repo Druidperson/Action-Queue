@@ -62,7 +62,7 @@ Combat skills train by fighting, with the gear you have on. The queue picks the 
 - Slayer fights in Slayer areas you can enter, or on your Slayer task. With no task, it asks before rolling one and tells you how many of that tier's monsters are safe for you.
 - If you start a fight yourself while the queue runs, it pauses and leaves your fight alone.
 
-If you play while the queue runs and eat yourself, turn on "Fights don't need auto eat" in the mod settings. Fights then count as safe without auto eat, but it still won't fight anything that can hit for half your HP.
+If you play while the queue runs and eat yourself, turn on "Fights don't need auto eat" in the mod settings. Fights then count as safe without auto eat, but it still won't fight anything that can hit for half your HP. For a single Township fight, use the checkbox in its window instead (see below).
 
 ## Township tasks
 
@@ -71,6 +71,8 @@ Every requirement in your Township task list gets a green play button. Press it 
 - Stardust and Golden Stardust: the plan takes you to Astrology and asks which constellation to study, or uses the best XP per hour.
 - Drops: for items that only drop, like Bird Nests or Bones, it picks the quickest way, a skill that drops it or a fight that's safe for you. It checks your Slayer task too. You can always pick a different tree or monster.
 - Monster tasks show how the enemy attacks, what it's weak to and where to find it. You can check your food and swap equipment sets without closing the window.
+- If a monster task isn't safe while you're away, like a boss that hits harder than where your auto eat starts, the window says why. Tick "I'll stay and eat myself during this fight" and you can still add it. The queue then runs that fight without waiting for auto eat, so stay and eat. If you don't, you can die and lose an item. A monster that can kill you in one hit from full HP, or having no food equipped, still can't be added.
+- Dungeon bosses, like Mumma Chicken, run the whole dungeon from the first room. One run counts as one kill of the boss.
 - XP tasks use the same planner as the Train window and switch methods as you level up.
 - If it can't find where an item comes from, it points you to the wiki.
 

@@ -478,6 +478,56 @@
     eq(pl.selectedEquipmentSet, mine, "set after the second Stop");
   }), { live: true });
 
+  // monsters with a fight the queue knows: one it won't run alone but you can eat yourself through, one that can one-hit you
+  const fightable = () => list(game.monsters).filter((m) => S().fightId(m));
+  const eatYourselfMonster = () => fightable().find((m) => { const D = T()._dev; return !D.queueSafety(m).ok && D.queueSafety(m, true).ok && !D.areaMissing(m).length; });
+  test(CB, "a fight the queue won't run alone offers the eat-yourself box, and Add stays off until it's ticked", () => sandbox(async () => {
+    const m = eatYourselfMonster(); if (!m) skip("every fight is either safe for you or too dangerous");
+    await closeSwal();
+    T()._dev.fire(m.name, () => T()._dev.selfEatSection(m), () => {}); await waitFor(() => SwalLocale.getPopup()?.querySelector("[data-mbd-selfeat]"), 3000, 100); await sleep(500);
+    const pop = SwalLocale.getPopup(), box = pop.querySelector("[data-mbd-selfeat]");
+    has(pop.textContent, "dying loses an item");
+    ok(pop.querySelector(".swal2-deny").disabled, "Add to queue should be off before ticking");
+    box.click(); await sleep(100);
+    ok(!pop.querySelector(".swal2-deny").disabled, "Add to queue should be on after ticking");
+    const e = T()._dev.killEntry({ monster: m, quantity: 1 }, false)[0]; eq(e.selfEat, true, "the step should remember the choice"); has(e.label, "you eat yourself");
+    box.click(); await sleep(100); ok(pop.querySelector(".swal2-deny").disabled, "unticking turns it back off");
+  }));
+  test(CB, "a monster that can one-hit you can't be added, even if you'd eat yourself", () => {
+    const m = fightable().find((x) => /one hit/.test(T()._dev.queueSafety(x, true).why ?? ""));
+    if (!m) skip("nothing here can hit for more than your HP");
+    const html = T()._dev.selfEatSection(m);
+    ok(!/data-mbd-selfeat/.test(html), "there shouldn't be a box"); has(text(html), "can't run this fight");
+  });
+  test(CB, "a fight you said you'd eat yourself for gets past the auto eat check", () => sandbox(async () => {
+    liveOk();
+    const m = eatYourselfMonster(); if (!m) skip("every fight is either safe for you or too dangerous");
+    add([{ kind: "kill", monsterId: m.id, skillId: "melvorD:Hitpoints", actionId: S().fightId(m), qty: 1, label: `Defeat ${m.name} (you eat yourself)`, selfEat: true }]);
+    A().runner.start(); await sleep(2500);
+    ok(items()[0].status !== "blocked", `blocked: ${items()[0].reason}`); eq(game.activeAction, game.combat, "not fighting");
+    A().runner.stop(); await sleep(200);
+    // the same fight without the choice is still refused
+    Q().items = []; Q().save();
+    add([{ kind: "kill", monsterId: m.id, skillId: "melvorD:Hitpoints", actionId: S().fightId(m), qty: 1, label: `Defeat ${m.name}` }]);
+    A().runner.start(); await sleep(500);
+    if (!T()._dev.queueSafety(m).ok) { eq(items()[0].status, "blocked"); has(items()[0].reason, "not safe"); }
+  }), { live: true });
+  test(CB, "a dungeon boss runs the whole dungeon instead of stopping", () => sandbox(async () => {
+    liveOk();
+    const dg = list(game.dungeons).find((d) => { const b = d.monsters?.[d.monsters.length - 1]; return b && S().fightId(b)?.includes(`:${d.id}:`) && T()._dev.queueSafety(b, true).ok && !T()._dev.areaMissing(b).length; });
+    if (!dg) skip("no dungeon you can run");
+    const boss = dg.monsters[dg.monsters.length - 1];
+    add([{ kind: "kill", monsterId: boss.id, skillId: "melvorD:Hitpoints", actionId: S().fightId(boss), qty: 1, label: `Defeat ${boss.name} (you eat yourself)`, selfEat: true }]);
+    A().runner.start(); await sleep(4000);
+    ok(items()[0].status === "active", `${items()[0].status}: ${items()[0].reason ?? R().message}`);
+    eq(game.combat.selectedArea, dg, "not in the dungeon");
+  }), { live: true });
+  test(CB, "level goals never pick a dungeon fight", () => {
+    const bad = [];
+    for (const n of ["Attack", "Strength", "Defence", "Hitpoints", "Ranged", "Magic", "Prayer", "Slayer"]) for (const c of S().plan.trainCands(skill(n))) if (c.a.dungeon) bad.push(`${n}: ${c.a.name}`);
+    eq(bad.join("; "), "");
+  });
+
   // =================================================================================================================
   const MX = "More skills";
   test(MX, "Farming waits for crops, works on the next step meanwhile, then harvests", () => sandbox(async () => {

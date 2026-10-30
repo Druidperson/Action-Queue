@@ -5,7 +5,7 @@
 //   3. Township tasks: the green play buttons on Township tasks, which plan a task and add its steps
 // The parts talk through `parts` below. Other mods still reach the queue as mod.api.actionQueue (or window.actionQueue).
 export function setup(ctx) {
-  const VERSION = "2.0.1";
+  const VERSION = "2.1.0";
   const parts = { aq: null, st: null, installed: false };
 
   // ======================================================================================================================
@@ -695,12 +695,21 @@ export function setup(ctx) {
     const resistance = () => Number(player()?.stats.getResistance?.(game.normalDamage)) || 0;
     // a hit you take while away is safe when auto eat starts above the biggest hit and there is food to eat.
     // A few pieces of food stay in reserve, so the step stops before the last one is gone.
-    const takeSafety = (max) => {
+    // mode "self": you said you'll stay and eat yourself for this fight, so only food and a hit that kills from full HP count.
+    // mode "noAuto": the "Fights don't need auto eat" setting is on, so anything that can't take half your HP is fine.
+    const takeSafety = (max, mode = null) => {
       try {
         const pl = player(), slot = pl.food.slots[pl.food.selectedSlot], hp = pl.stats.maxHitpoints, eat = Number(pl.autoEatThreshold) || 0;
+        const noFood = !slot?.item || !(slot.quantity > 0) || slot.item.id === "melvorD:Empty_Food";
+        if (mode === "self") {
+          if (noFood) return { ok: false, hard: true, why: "you have no food equipped" };
+          if (max >= hp) return { ok: false, hard: true, why: `it can hit for ${num(max)}, more than your ${num(hp)} HP, so it could kill you in one hit even if you eat` };
+          return { ok: true, self: true };
+        }
         if (!(max > 0)) return { ok: true };
         if (max * 2 >= hp) return { ok: false, why: `it can hit for ${num(max)} against your ${num(hp)} HP` };
-        if (!slot?.item || !(slot.quantity > 0) || slot.item.id === "melvorD:Empty_Food") return { ok: false, why: "you have no food equipped" };
+        if (mode === "noAuto") return { ok: true };
+        if (noFood) return { ok: false, why: "you have no food equipped" };
         if (slot.quantity < 3) return { ok: false, why: "you're almost out of food" };
         if (eat <= 0) return { ok: false, why: "auto eat is off, so nothing eats your food while the queue runs" };
         if (eat < max) return { ok: false, why: `auto eat starts at ${num(Math.round(eat))} HP but it can hit for ${num(max)}` };
@@ -1031,26 +1040,41 @@ export function setup(ctx) {
     const kills = (id) => { try { return game.stats.monsterKillCount(game.monsters.getObjectByID(id)) ?? 0; } catch (e) { return 0; } };
     // the fight a kill or drop step uses: any combat area or Slayer area the monster is in (null for dungeons)
     const fightId = (m) => { const a = [...list(game.combatAreas), ...list(game.slayerAreas)].find((x) => (x.monsters ?? []).includes(m)); return a ? `fight:${a.id}:${m.id}` : null; };
-    const fighting = (m) => game.activeAction === game.combat && game.combat.selectedMonster === m;
+    // dungeons, strongholds and abyssal depths are run room by room from the start, so you're "on" a boss there from the
+    // first room until it's down (the game starts the next run by itself when it ends)
+    const isRun = (area) => !!area && ["dungeons", "strongholds", "abyssDepths"].some((k) => list(game[k]).includes(area));
+    const fighting = (m, area) => game.activeAction === game.combat && (isRun(area) ? game.combat.selectedArea === area : game.combat.selectedMonster === m);
     const startFight = (skill, m, area) => {
       const pl = player(), style = styleFor(skill), pr = skill.id === PRAYER && bestPrayer();
-      if (game.activeAction && !fighting(m)) game.stopActiveAction();
+      if (game.activeAction && !fighting(m, area)) game.stopActiveAction();
       savedCombat ??= { type: pl.attackType, style: pl.attackStyles[pl.attackType], prayers: [...pl.activePrayers] };
       if (style && pl.attackStyles[pl.attackType] !== style) pl.setAttackStyle(pl.attackType, style);
       if (pr && !(pl.prayerPoints > 0)) buryBones();
       if (pr && !pl.activePrayers.has(pr)) pl.togglePrayer(pr);
-      if (!fighting(m)) game.combat.selectMonster(m, area);
+      if (!fighting(m, area)) game.combat.selectMonster(m, area);
     };
     const fightMethods = (skill) => [...list(game.combatAreas), ...list(game.slayerAreas)].filter(realmOk).flatMap((area) => (area.monsters ?? []).filter((m) => realmOk(m) && m.levels).map((m) => {
-      const ev = () => perSec(`${skill.id}|${area.id}|${m.id}`, () => ({ ...killStats(m), xp: xpPerKill(skill, m, area), hit: maxTaken(m) }));
+      const run = isRun(area);
+      // in a run, every room counts: the hardest hit of any monster in it, and the time to clear it for each kill of this one
+      const ev = () => perSec(`${skill.id}|${area.id}|${m.id}`, () => {
+        if (!run) return { ...killStats(m), xp: xpPerKill(skill, m, area), hit: maxTaken(m) };
+        const ms = area.monsters, hits = [...new Set(ms)].map(maxTaken), per = ms.filter((x) => x === m).length || 1;
+        return { ...killStats(m), ms: ms.reduce((t, x) => t + killStats(x).ms, 0) / per, xp: xpPerKill(skill, m, area), hit: hits.includes(null) ? null : Math.max(...hits) };
+      });
       return method(skill, m, {
         id: `fight:${area.id}:${m.id}`, name: `Fight ${nm(m)}${game.slayerAreas.allObjects.includes(area) ? ` (${nm(area)})` : ""}`, media: m.media, product: null, level: 1, succ: 1,
         actor: game.combat, noMastery: true, cap: () => (skill.id === SLAYER && !game.slayerAreas.allObjects.includes(area) ? game.combat.slayerTask.killsLeft : Infinity),
         get xp() { return ev().xp; }, get ms() { return ev().ms; },
         // a combat spell uses runes on every cast
         get options() { const pl = player(), sp = pl.spellSelection.attack; return pl.attackType === "magic" && sp ? [{ costs: pl.getRuneCosts(sp).map((k) => ({ item: k.item, quantity: k.quantity * ev().attacks })), mult: 1 }] : NO_COSTS; },
-        need: () => fightNeed(skill, m, area), check: () => fightCheck(skill), active: () => fighting(m), start: () => startFight(skill, m, area),
-        safe: () => (ev().hit === null ? { ok: false, why: `${nm(m)} has special attacks whose damage can't be worked out` } : takeSafety(ev().hit)),
+        dungeon: run, // a Township task can send you here, but training goals don't (their XP numbers would be off)
+        need: () => fightNeed(skill, m, area), check: () => fightCheck(skill), active: () => fighting(m, area), start: () => startFight(skill, m, area),
+        // e is the queue step: a fight you said you'd eat yourself for skips the auto eat check
+        safe: (e) => {
+          const hit = ev().hit, mode = e?.selfEat ? "self" : parts.noAutoEat?.() ? "noAuto" : null;
+          if (hit === null && mode !== "self") return { ok: false, why: `${nm(m)} has special attacks whose damage can't be worked out` };
+          return takeSafety(hit ?? 0, mode);
+        },
       });
     }));
     const methodCache = new Map();
@@ -1289,11 +1313,12 @@ export function setup(ctx) {
       if (!s.isActive) s.createButtonOnClick();
     };
     const startAction = (e) => {
-      const skill = skillById(e.skillId), m = methodById(skill, e.actionId), safety = m?.safe?.();
+      const skill = skillById(e.skillId), m = methodById(skill, e.actionId), safety = m?.safe?.(e);
       if (!m) return fail(e.kind === "kill" ? "this monster is in a dungeon or special area, so fight it yourself, then press Start" : "this action wasn't found in your game version");
       if (m.level > skill.level) return fail(`needs ${nm(skill)} level ${m.level}`);
       if (m.need?.()) return fail(m.need());
       if (safety && !safety.ok) return fail(`not safe while you're away: ${safety.why}`);
+      if (safety?.self && game.activeAction !== m.actor) A.tell(`${e.label.replace(/ \(you eat yourself\)$/, "")}: the queue isn't waiting for auto eat in this fight, so keep an eye on your HP and eat.`, skillById(HITPOINTS));
       const chk = m.check?.();
       if (chk) return fail(chk.why, { noMaterials: !!chk.noMaterials });
       try {
@@ -1360,7 +1385,7 @@ export function setup(ctx) {
     const trainCands = (skill, lv) => {
       const out = [], L = levelIn(skill, lv);
       for (const m of methodsOf(skill)) {
-        const st = m.level <= L && m.xp > 0 && !m.need?.(lv) && m.safe?.().ok !== false && stepFor(m);
+        const st = !m.dungeon && m.level <= L && m.xp > 0 && !m.need?.(lv) && m.safe?.().ok !== false && stepFor(m);
         if (!st) continue;
         const opt = st.craft ? m.options[0] : NO_COSTS[0];
         let ms = m.ms, xpPer = m.xp * m.succ, mast = 0;
@@ -1377,7 +1402,7 @@ export function setup(ctx) {
     const blockedWhy = (skill) => {
       // skill actions first, fights after: Alt Magic short on runes says so before Magic combat asks for a staff
       for (const m of [...methodsOf(skill)].sort((a, b) => !!a.actor - !!b.actor)) {
-        if (m.level > skill.level) continue;
+        if (m.level > skill.level || m.dungeon) continue;
         const need = m.need?.();
         if (need) return need;
         const safe = m.xp > 0 && m.safe?.();
@@ -1552,7 +1577,7 @@ export function setup(ctx) {
       ticks: (e) => !!methodOf(e)?.tick,
       tick: (e) => { const m = methodOf(e); return m?.tick ? m.tick(e) : null; },
       check: (e) => {
-        const m = methodOf(e), s = m?.safe?.();
+        const m = methodOf(e), s = m?.safe?.(e);
         if (s && !s.ok) return { why: `not safe while you're away: ${s.why}` };
         return m?.check?.() ?? null;
       },
@@ -2044,6 +2069,7 @@ export function setup(ctx) {
     try { const v = setSec?.get("noAutoEat"); if (v !== undefined && v !== null) return !!v; } catch (e) { /* use the fallback */ }
     try { return localStorage.getItem("mbd-th-noautoeat") === "1"; } catch (e) { return false; }
   };
+  parts.noAutoEat = noAutoEat; // the training part's fight check follows this setting too
   // what you have to survive with: HP, equipped food and the auto eat settings (a queue runs while you're away, so only auto eat counts)
   const playerGuard = () => {
     const pl = game.combat?.player;
@@ -2418,6 +2444,26 @@ export function setup(ctx) {
       `<div class="mbd-row"><div class="mbd-rowlbl">Equipment sets (click to switch)</div><div class="mbd-sets">${setsHtml()}</div></div></div>`;
   };
 
+  // Fights the queue won't run on its own (auto eat too low, for one) can still go in the queue if you tick the box saying
+  // you'll stay and eat yourself. A hit that kills from full HP, or no food at all, can't be fixed that way.
+  const Fight = { selfEat: false };
+  const fightMethod = (m) => { const id = st().fightId(m); return id ? st().skills.methodById(skillById(HITPOINTS), id) : null; };
+  const queueSafety = (m, self = false) => { try { return fightMethod(m)?.safe?.(self ? { selfEat: true } : undefined) ?? { ok: true }; } catch (e) { return { ok: true }; } };
+  const selfEatSection = (m) => {
+    const s = queueSafety(m);
+    if (s.ok) return "";
+    const own = queueSafety(m, true);
+    if (!own.ok) return `<div class="mbd-step" data-mbd-unsafe><div class="mbd-chips">${chip(`<i class="fa fa-exclamation-triangle"></i>&nbsp;The queue can't run this fight: ${esc(own.why)}`, "warn")}</div></div>`;
+    return `<div class="mbd-step" data-mbd-unsafe><div class="mbd-chips">${chip(`<i class="fa fa-exclamation-triangle"></i>&nbsp;Not safe while you're away: ${esc(s.why)}`, "warn")}</div>` +
+      `<label style="display:block;margin:8px 0 2px;cursor:pointer"><input type="checkbox" data-mbd-selfeat${Fight.selfEat ? " checked" : ""}> I'll stay and eat myself during this fight</label>` +
+      `<div class="mbd-note">The queue runs it without waiting for auto eat. If you don't eat in time you can die, and dying loses an item.</div></div>`;
+  };
+  // Add to queue and Add to top stay off until the box is ticked
+  const syncFight = (popup) => {
+    const need = popup?.querySelector?.("[data-mbd-unsafe]"), box = popup?.querySelector?.("[data-mbd-selfeat]");
+    const off = !!need && !box?.checked;
+    for (const sel of [".swal2-deny", ".swal2-cancel"]) { const b = popup?.querySelector?.(sel); if (b) { b.disabled = off; b.style.opacity = off ? ".5" : ""; b.title = off ? "Tick the box above to add this fight" : ""; } }
+  };
   const monsterSection = (m, kills) => {
     const places = [];
     for (const [key, label] of AREA_KINDS) {
@@ -2442,7 +2488,7 @@ export function setup(ctx) {
       (typeof m.media === "string" ? `<img src="${esc(m.media)}" style="width:56px;height:56px;object-fit:contain;display:block;margin:0 auto 4px">` : "") +
       `<b>${esc(nm(m))}</b>${kills ? ` &times;${num(kills)}` : ""}</div>` +
       `<div class="mbd-chips">${chips.join("")}</div></div>` +
-      combatSection(m) + gearSection() +
+      combatSection(m) + gearSection() + selfEatSection(m) +
       `<div class="mbd-sec">Location:</div>` +
       (places.length
         ? places.slice(0, 8).join("") + (places.length > 8 ? `<div class="mbd-place">+${places.length - 8} more</div>` : "")
@@ -2487,7 +2533,9 @@ export function setup(ctx) {
           for (const [k, v] of Object.entries(sz)) el.style.setProperty(k, v, "important");
           if (sel === ".swal2-confirm") el.style.setProperty("min-width", "84px", "important");
         }
+        syncFight(popup);
         popup?.addEventListener?.("change", (ev) => {
+          if (ev.target?.matches?.("[data-mbd-selfeat]")) { Fight.selfEat = ev.target.checked; syncFight(popup); return; }
           const fs = ev.target?.closest?.("[data-mbd-farm]");
           if (fs) {
             Farm.pick[fs.dataset.mbdFarm] = fs.value;
@@ -2580,7 +2628,8 @@ export function setup(ctx) {
     const need = total ? goal.quantity : Math.max(0, goal.quantity - (goal._progress ?? 0));
     if (total ? game.stats.monsterKillCount(m) >= goal.quantity : need <= 0) return [];
     const left = total ? goal.quantity - game.stats.monsterKillCount(m) : need;
-    return [{ kind: "kill", monsterId: m.id, skillId: HITPOINTS, actionId: st().fightId(m) ?? `fight:none:${m.id}`, qty: left, label: `Defeat ${nm(m)}` }];
+    const self = Fight.selfEat && !queueSafety(m).ok;
+    return [{ kind: "kill", monsterId: m.id, skillId: HITPOINTS, actionId: st().fightId(m) ?? `fight:none:${m.id}`, qty: left, label: `Defeat ${nm(m)}${self ? " (you eat yourself)" : ""}`, ...(self ? { selfEat: true } : {}) }];
   };
   const describeGoal = (goal) => {
     const type = goal?.constructor?.name;
@@ -2643,7 +2692,7 @@ export function setup(ctx) {
       ev.preventDefault();
       ev.stopPropagation();
       try {
-        Astro.pick = "best"; Farm.pick = {};
+        Astro.pick = "best"; Farm.pick = {}; Fight.selfEat = false;
         const onQueue = info.queue && !info.blocked?.() ? (top) => queueSteps(info.queue(), top) : null;
         fire(info.title, () => dupHtml(info.queue?.()) + info.body(), onQueue);
       } catch (e) { console.warn("[Township Task Helper]", e); }
@@ -2727,14 +2776,14 @@ export function setup(ctx) {
     window.townshipHelper = {
       version: VERSION,
       showItem: (id, qty = 1) => {
-        Astro.pick = "best"; Farm.pick = {};
+        Astro.pick = "best"; Farm.pick = {}; Fight.selfEat = false;
         const it = itemById(id);
         const miss = itemMissing(it, qty);
         fire(`${qty} x ${esc(nm(it))}`, () => (itemMissing(it, qty).length ? missingHtml(itemMissing(it, qty)) : dupHtml(toEntries(buildRows(it, qty))) + itemSection(it, qty)), miss.length || !buildRows(it, qty).length ? null : (top) => queueSteps(toEntries(buildRows(it, qty)), top));
       },
       refresh,
       // internals for testing
-      _dev: { itemMissing, areaMissing, buildRows, toEntries, itemSection, sourceHtml, describeGoal, killEntry, xpEntry, xpSection, dropEntry, farmPlan, farmSkills, farmFights, fightSafety, astroOptions, bestCon, isFarmItem, isAstroItem, fire },
+      _dev: { selfEatSection, queueSafety, itemMissing, areaMissing, buildRows, toEntries, itemSection, sourceHtml, describeGoal, killEntry, xpEntry, xpSection, dropEntry, farmPlan, farmSkills, farmFights, fightSafety, astroOptions, bestCon, isFarmItem, isAstroItem, fire },
     };
     LOG("installed", VERSION);
   };
