@@ -35,6 +35,8 @@ export function setup(ctx) {
       "When on, the planner counts the mastery XP a method gives next to the skill XP, and sticks with a method longer so its mastery keeps growing. When off, it only looks at skill XP per hour."],
     autoSell: ["aq-autosell", true, "Automatically sell extras the queue makes",
       "When a step makes more than the task needs (like arrowtips crafted in batches), the extra is sold. It never sells anything you already owned."],
+    autoBuy: ["aq-autobuy", false, "Buy from the shop without asking",
+      "When on, steps that need feathers, Summoning shards, compost or anything else from the shop buy it right away. When off, the queue asks you before every purchase. Agility obstacles, Slayer tasks and dig site maps always ask."],
     sideJobs: ["aq-sidejobs", true, "Work on other steps while crops grow",
       "When on, a Farming step that is waiting for its crops lets a later step run in the meantime (gathering, or training that uses no materials), and goes back to the crops once they're ready."],
   };
@@ -119,6 +121,17 @@ export function setup(ctx) {
       const t = sp.specialCost?.type, fixed = sp.fixedItemCosts ?? [], base = { qty: sp.productionRatio ?? 1, ms: skill.baseInterval ?? 2000, succ: 1 };
       if (t === -5 && sp.produces && typeof sp.produces === "object")
         return [method(skill, sp, { ...base, product: sp.produces, get options() { return [{ costs: [...runes(sp), ...fixed], mult: 1 }]; }, start: cast(sp) })];
+      // spells that use up an item you pick (Just Learning, Item Alchemy): cast them on whatever the queue can get the
+      // quickest, so the item counts as part of the work. Alchemy turns it into GP as well.
+      if (t === -1) return [method(skill, sp, {
+        ...base, own: true, product: typeof sp.produces === "object" ? sp.produces : null,
+        get pick() { return perSec(`alt|${sp.id}`, () => altFeed(skill, sp)); },
+        get name() { const p = this.pick; return p ? `${nm(sp)} (${nm(p.item)}${p.gp ? `, ${num(Math.round(p.gp))} GP each` : ""})` : nm(sp); },
+        get media() { return this.pick?.item.media ?? sp.media; },
+        get options() { const it = this.pick?.item; return [{ costs: [...(it ? [{ item: it, quantity: sp.specialCost.quantity ?? 1 }] : []), ...runes(sp), ...fixed], mult: 1 }]; },
+        need: () => (perSec(`alt|${sp.id}`, () => altFeed(skill, sp)) ? null : "there's nothing the queue can get to cast it on"),
+        start: () => { const it = altFeed(skill, sp)?.item; if (!it) return fail("there's nothing the queue can get to cast it on"); skill.selectSpellOnClick(sp); skill.selectItemOnClick(it); if (!skill.isActive) skill.castButtonOnClick(); },
+      })];
       if (t !== -3 && t !== -4) return [];
       return bars.map((r) => method(skill, sp, {
         ...base, id: `${sp.id}|${r.id}`, name: `${nm(sp)} (${nm(r.product)})`, media: r.product.media, product: r.product, own: true, start: cast(sp, r),
@@ -126,6 +139,24 @@ export function setup(ctx) {
         get options() { return [{ costs: [...r.itemCosts.filter((k) => t === -3 || k.item.id !== "melvorD:Coal_Ore").map((k) => ({ item: k.item, quantity: k.quantity * (sp.specialCost.quantity ?? 1) })), ...runes(sp), ...fixed], mult: 1 }]; },
       }));
     });
+  };
+  // the item an "any item" spell is cast on: one the queue can gather or make, with the most XP per hour counting the time to
+  // get it (for alchemy, the one that makes the most GP among the fastest). It never picks items only the shop, monsters or you can get.
+  const altFeed = (skill, sp) => {
+    const out = [], castMs = skill.baseInterval ?? 2000, q = sp.specialCost?.quantity ?? 1, prod = typeof sp.produces === "object" ? sp.produces : null;
+    const alch = typeof sp.produces !== "object" && sp.produces === -1;
+    for (const id of new Set([...index().gatherers.keys(), ...index().crafters.keys()])) {
+      const item = itemById(id);
+      if (!item || item === prod || !(item.sellsFor?.quantity > 0) || item.sellsFor.currency?.id !== "melvorD:GP") continue;
+      const t = makeTime(item, q);
+      if (!isFinite(t.ms)) continue;
+      let gp = 0;
+      if (alch) { try { gp = Number(skill.getAlchemyGP(item, sp.productionRatio ?? 0)) || 0; } catch (e) { gp = item.sellsFor.quantity * (sp.productionRatio ?? 0); } }
+      out.push({ item, ms: castMs + t.ms, gp });
+    }
+    // anything within 10% of the fastest counts as just as good, and then the one that makes the most GP wins
+    const fast = Math.min(...out.map((x) => x.ms));
+    return out.filter((x) => x.ms <= fast * 1.1).sort((a, b) => b.gp - a.gp || a.ms - b.ms)[0] ?? null;
   };
   // what is special about each skill's actions; skills not listed use their actions as they are
   const SKILLS = {
@@ -494,7 +525,7 @@ export function setup(ctx) {
         title = `${icon(n.item)}<b>${esc(nm(n.item))}</b> &times;${num(n.qty)}`;
         body = chips(haveChip) + (g.length
           ? chips(chip(`<i class="fa fa-hand-paper"></i> <b>Gather</b>`, "lbl"), ...g.slice(0, 3).map((x) => chip(`${esc(nm(x.skill))}: ${esc(nm(x.a))} (Lv ${lvl(x.a)})`))) + (lb ? chips(lvlChip(lb.skill, lb.a)) : "")
-          : shopOnly(n.item) ? chips(chip(`<i class="fa fa-shopping-cart"></i> <b>Buy</b>`, "lbl"), chip(`From the shop for ${esc(costText(costsOf(game.shop.getPurchaseCosts(shopFor(n.item), Math.ceil(n.qty / perBuy(shopFor(n.item)))))))}`), chip("Asks you first", "ok"))
+          : shopOnly(n.item) ? chips(chip(`<i class="fa fa-shopping-cart"></i> <b>Buy</b>`, "lbl"), chip(`From the shop for ${esc(costText(costsOf(game.shop.getPurchaseCosts(shopFor(n.item), Math.ceil(n.qty / perBuy(shopFor(n.item)))))))}`), chip(Settings.get("autoBuy") ? "Bought without asking" : "Asks you first", "ok"))
           : chips(chip(MANUAL_NOTE, "warn")));
       }
       return step(`<div class="aq-stepno">Step ${i + 1}</div><div class="aq-title">${title}</div>${body}`);
@@ -524,7 +555,7 @@ export function setup(ctx) {
 
   // ---------- the shop ----------
   // Things nothing else makes (feathers, compost, Summoning shards) can come from the shop. Only plain purchases of one item
-  // for currency count, and the queue asks you before every purchase.
+  // for currency count, and the queue asks you before every purchase unless auto-buy is on.
   let shopIdx = null;
   const shopFor = (item) => {
     if (!shopIdx) {
@@ -592,6 +623,7 @@ export function setup(ctx) {
         return true;
       },
       cannot: (e, t) => buyIssue(t.p, t.n()),
+      auto: () => Settings.get("autoBuy"),
       act: (e, t) => {
         const n = t.n(), buys = Math.ceil(n / perBuy(t.p)), sh = game.shop, was = sh.buyQuantity, cost = costText(costsOf(sh.getPurchaseCosts(t.p, buys)));
         try { sh.buyQuantity = buys; sh.buyItemOnClick(t.p, true); } finally { sh.buyQuantity = was; }
@@ -1212,7 +1244,7 @@ export function setup(ctx) {
   const ACTS = {
     close: () => Panel.close(), up: (id) => Queue.move(id, -1), down: (id) => Queue.move(id, 1), top: (id) => Queue.toTop(id), remove: (id) => Queue.remove(id),
     clear: () => Queue.clear(), cleardone: () => Queue.clearDone(), start: () => Runner.start(), pause: () => Runner.pause("Paused"), stop: () => Runner.stop(),
-    first: (id) => Runner.doFirst(id), autostart: () => toggleSetting("autoStart"), autosell: () => toggleSetting("autoSell"),
+    first: (id) => Runner.doFirst(id), autostart: () => toggleSetting("autoStart"), autosell: () => toggleSetting("autoSell"), autobuy: () => toggleSetting("autoBuy"),
   };
   const small = (cls, html) => `<br><small class="${cls}">${html}</small>`;
   const Panel = {
@@ -1257,7 +1289,7 @@ export function setup(ctx) {
         : isTrain && e.now && !done ? small("text-muted", `now: ${esc(e.now)}`)
         : manual && !done ? small("text-muted", `do this yourself${e.status === "waiting" ? " (waiting for you)" : ""}`)
         : e.info && !done && (e.kind !== "ask" || e.status === "waiting") ? small("text-muted", esc(e.info))
-        : e.kind === "ask" && !done ? small("text-muted", e.what === "equip" ? (e.set >= 0 ? "switches your equipment set" : "waits for you to equip it") : e.optional ? "optional, asks you first" : "asks you first") : "";
+        : e.kind === "ask" && !done ? small("text-muted", e.what === "equip" ? (e.set >= 0 ? "switches your equipment set" : "waits for you to equip it") : e.what === "buy" && Settings.get("autoBuy") ? "buys it without asking" : e.optional ? "optional, asks you first" : "asks you first") : "";
       return `<div style="display:flex;align-items:center;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.07);${done ? "opacity:.5" : ""}" ${manual ? `title="${esc(e.note ?? "")}"` : ""}>` +
         `<div style="flex:1;min-width:0">${lead}${icon(isTrain ? skillById(e.skillId) : e.kind === "ask" ? askIcon(e) : e.kind === "skill" || e.kind === "kill" ? methodById(skillById(e.skillId), e.actionId) ?? skillById(e.skillId) : itemById(e.itemId))}<span class="${manual ? "text-muted font-italic" : ""}" style="${done ? "text-decoration:line-through" : ""}">${esc(e.label)}</span> <b>${amount}</b>` +
         `${Runner.focusId === e.id ? ' <span class="badge badge-success">first</span>' : ""}${sub}</div>` +
@@ -1272,11 +1304,12 @@ export function setup(ctx) {
       const etaText = pending === 0 ? (q.length ? "All done" : "Queue is empty") : `${fmtDur(eta.ms)} left &middot; done around ${fmtClock(eta.ms)}` +
         (eta.manual ? ` <span class="text-muted">(+ ${eta.manual} manual step${eta.manual === 1 ? "" : "s"})</span>` : "") + (eta.unknown ? ` <span class="text-muted">(some steps can't be estimated)</span>` : "");
       const b = (act, label, ic, cls, disabled) => `<button class="btn btn-sm ${cls}" data-act="${act}" ${disabled ? "disabled" : ""} style="padding:2px 10px"><i class="fa ${ic} mr-1"></i>${label}</button>`;
-      const as = Settings.get("autoStart"), sl = Settings.get("autoSell");
+      const as = Settings.get("autoStart"), sl = Settings.get("autoSell"), ab = Settings.get("autoBuy");
       const html =
         `<div data-drag class="aq-ph" title="Drag to move"><i class="fa fa-grip-vertical mr-2" style="opacity:.4"></i>` +
         `<a data-act="autostart" class="pointer-enabled mr-2" title="Auto-start: ${as ? "On" : "Off"}" style="font-size:19px;line-height:1;${as ? "color:#30c78d" : "opacity:.45"}"><i class="fa ${as ? "fa-toggle-on" : "fa-toggle-off"}"></i></a>` +
         `<a data-act="autosell" class="pointer-enabled mr-2" title="Auto-sell extras: ${sl ? "On" : "Off"}" style="font-size:15px;line-height:1;${sl ? "color:#e5ae67" : "opacity:.45"}"><i class="fa fa-dollar-sign"></i></a>` +
+        `<a data-act="autobuy" class="pointer-enabled mr-2" title="Buy from the shop without asking: ${ab ? "On" : "Off"}" style="font-size:14px;line-height:1;${ab ? "color:#4fc3f7" : "opacity:.45"}"><i class="fa fa-shopping-cart"></i></a>` +
         `<b style="flex:1">Action Queue</b><span class="text-muted mr-2">${plural(pending, "action")} left</span><a data-act="close" class="pointer-enabled text-white" title="Close"><i class="fa fa-times"></i></a></div>` +
         `<div data-list style="overflow:auto;padding:4px 10px;flex:1">` +
         (q.length ? q.map((e) => this.row(e)).join("") : `<div class="text-muted py-3 text-center">Nothing queued yet.<br>Skill Trainer and Township Task Helper add their steps here.</div>`) +
