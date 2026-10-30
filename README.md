@@ -57,7 +57,7 @@ Pick Agility in the Train window and it shows which empty slots it can fill, wit
 Combat skills train by fighting, with the gear you have on. The queue picks the fight with the best XP per hour that's safe while you're away. Safe means food equipped, auto eat above the monster's biggest hit (special attacks and the combat triangle included), and nothing that can take half your HP in one hit. If your food gets low, the queue stops before it runs out.
 
 - It sets the attack style that trains your skill and puts yours back when the step ends.
-- Attack and Strength need a melee weapon, Ranged needs a bow and ammo, Magic needs a magic weapon and a spell. If another equipment set has the right weapon, the queue switches to it and back after. If not, it waits for you.
+- Attack and Strength need a melee weapon, Ranged needs a bow and ammo, Magic needs a magic weapon and a spell. If another equipment set has the right weapon, the queue switches to it, and back when the goal is done or you stop it. If not, it waits for you.
 - Prayer turns on your best prayer. Out of points, it buries your cheapest bones.
 - Slayer fights in Slayer areas you can enter, or on your Slayer task. With no task, it asks before rolling one and tells you how many of that tier's monsters are safe for you.
 - If you start a fight yourself while the queue runs, it pauses and leaves your fight alone.
@@ -104,6 +104,10 @@ Anything that costs something stops and asks you first, with a Skip button if yo
 ## For mod makers
 
 Other mods can add steps through `mod.api.actionQueue` (or `window.actionQueue`). The API covers adding and removing steps, starting and stopping the runner, settings, shop helpers, ask steps and adding your own button next to the queue button. The training planner is on `window.skillTrainer`.
+
+## Tests
+
+There's a test suite in `tests/action-queue.tests.js`. Load your game with the mod on, paste the file into the browser console and run `await AQTests.run()`. It puts back your queue, settings and anything it adds to your bank. Keep the game in front while it runs, the game pauses when it's hidden.
 
 ## Bugs and ideas
 

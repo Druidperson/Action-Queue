@@ -5,7 +5,7 @@
 //   3. Township tasks: the green play buttons on Township tasks, which plan a task and add its steps
 // The parts talk through `parts` below. Other mods still reach the queue as mod.api.actionQueue (or window.actionQueue).
 export function setup(ctx) {
-  const VERSION = "2.0.0";
+  const VERSION = "2.0.1";
   const parts = { aq: null, st: null, installed: false };
 
   // ======================================================================================================================
@@ -162,11 +162,21 @@ export function setup(ctx) {
       fresh: (entries) => entries.map((e) => ({ ...e, id: uid(), status: "pending" })),
       add(entries, top = false) { this.items = top ? [...this.fresh(entries), ...this.items] : [...this.items, ...this.fresh(entries)]; this.save(); },
       insertBefore(id, entries) { const i = this.pos(id); this.items.splice(i < 0 ? this.items.length : i, 0, ...this.fresh(entries)); this.save(); },
-      remove(id) { this.items = this.items.filter((e) => e.id !== id); this.save(); },
+      remove(id) { const gone = this.items.find((e) => e.id === id); this.items = this.items.filter((e) => e.id !== id); if (gone) giveBackGear([gone]); this.save(); },
       move(id, dir) { const i = this.pos(id), j = i + dir; if (i >= 0 && j >= 0 && j < this.items.length) { [this.items[i], this.items[j]] = [this.items[j], this.items[i]]; this.save(); } },
       toTop(id) { const i = this.pos(id); if (i > 0) { this.items.unshift(...this.items.splice(i, 1)); this.save(); } },
       clearDone() { this.items = this.items.filter((e) => e.status !== "done"); this.save(); },
       clear() { Runner.stop(); this.items = []; this.save(); },
+    };
+    // a goal that switched your equipment set switches it back when it's stopped or removed, not only when it's done
+    // (starting it again plans the switch again, and still remembers which set was yours)
+    const giveBackGear = (entries) => {
+      for (const e of entries) {
+        if (e.kind !== "train" || e.wasSet === undefined || e.status === "done") continue;
+        try { T?.trainFinished?.(e); } catch (err) { console.warn(TAG, "switching your equipment set back", err); }
+        // its switch step runs again next time, so the goal doesn't carry on without the right weapon
+        for (const x of Queue.items) if (x.kind === "ask" && x.what === "equip" && x.parent === e.id && x.status === "done") { x.status = "pending"; delete x.sold; delete x.answer; }
+      }
     };
     const updateBadge = () => {
       const b = document.querySelector("#aq-queue-btn .aq-count"), n = Queue.items.filter((e) => e.status !== "done").length;
@@ -260,6 +270,7 @@ export function setup(ctx) {
         if (cur && cur.status !== "done") { cur.status = "pending"; delete cur.startQty; delete cur.reason; }
         // a manual step that was waiting for you goes back to pending, so pressing Start later doesn't count it as done
         for (const e of Queue.items) if (e.status === "waiting") e.status = "pending";
+        giveBackGear(Queue.items);
         this.release();
         Object.assign(this, { focusId: null, elapsed: 0, state: "idle", message: "Stopped" });
         Queue.save();
@@ -560,14 +571,15 @@ export function setup(ctx) {
       .aq-swal .swal2-actions :is(.swal2-deny,.swal2-cancel,.swal2-confirm){height:36px!important;padding:0 16px!important;font-size:14px!important;line-height:1!important;box-sizing:border-box!important;
         display:inline-flex!important;align-items:center!important;justify-content:center!important;box-shadow:none!important;outline:none!important;margin:0!important}
       .aq-swal .swal2-deny{order:1} .aq-swal .swal2-cancel{order:2} .aq-swal .swal2-confirm{order:3;min-width:84px!important}
-      #aq-queue-panel{position:fixed;right:68px;bottom:16px;width:350px;max-height:70vh;display:none;flex-direction:column;z-index:1050;background:rgba(28,32,41,.98);color:#fff;
+      #aq-queue-panel{position:fixed;right:68px;bottom:16px;width:min(350px,calc(100% - 16px));max-height:70vh;display:none;flex-direction:column;z-index:1050;background:rgba(28,32,41,.98);color:#fff;
         border:1px solid rgba(255,255,255,.15);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.5);font-size:13px}
       .aq-ph{display:flex;align-items:center;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,.12);cursor:move;user-select:none;touch-action:none}
       .aq-pf{padding:10px;border-top:1px solid rgba(255,255,255,.12);text-align:center} .aq-btns{display:flex;justify-content:center;gap:6px}
       .aq-bar{position:relative;height:16px;border-radius:8px;background:rgba(255,255,255,.12);overflow:hidden} .aq-bar>div{height:100%;background:#30c78d;transition:width .8s}
       .aq-bar>span{position:absolute;left:0;right:0;top:0;line-height:16px;font-size:11px;font-weight:600;text-shadow:0 0 3px rgba(0,0,0,.7)}
       #aq-queue-btn{position:relative} .aq-ico{display:inline-block;width:24px;height:24px;line-height:24px;text-align:center;vertical-align:middle}
-      .aq-count{display:none;position:absolute;top:-6px;right:-6px;min-width:17px;height:17px;padding:0 4px;border-radius:9px;background:#17a2b8;color:#fff;font-size:10px;font-weight:600;line-height:17px;text-align:center}`;
+      @media (max-width:440px){#aq-queue-panel{right:8px}}
+    .aq-count{display:none;position:absolute;top:-6px;right:-6px;min-width:17px;height:17px;padding:0 4px;border-radius:9px;background:#17a2b8;color:#fff;font-size:10px;font-weight:600;line-height:17px;text-align:center}`;
     const install = () => {
       document.getElementById("aq-style")?.remove();
       document.head.appendChild(Object.assign(document.createElement("style"), { id: "aq-style", textContent: CSS }));
@@ -591,7 +603,8 @@ export function setup(ctx) {
       shop: { for: shopFor, perBuy, issue: buyIssue, canBuy },
       // Skill Trainer registers itself here; see "the trainer" above
       setTrainer: (t) => { if (T?.builtIn && !t?.builtIn) return void console.warn(TAG, "ignored a trainer from another mod, Skill Trainer is part of Action Queue now"); T = t; Panel.last = ""; Panel.render(); },
-      get hasTrainer() { return !!T; },
+      // a function, not a getter: the game copies this object for mod.api, and a getter would be read once at load
+      hasTrainer: () => !!T,
       addAsk: (what, def) => { if (what && def?.target && what !== "buy" && !(ASKS[what]?.builtIn && !def.builtIn)) ASKS[what] = def; },
       addButton, tell: tellPlayer,
       // for testing

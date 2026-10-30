@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.1
+- Stopping the queue, or removing a goal, now switches you back to your own equipment set if the goal had switched it. Before, it only switched back once the goal was done, so clearing a Ranged goal halfway left you on the bow set. Press Start again and it switches back to the right set.
+- The queue panel fits on narrow screens and phones now instead of running off the left side.
+- For mod makers: `hasTrainer` is a function now, since the game copies the API for `mod.api` and the old version always read false there.
+- New test suite in `tests/action-queue.tests.js` that covers the queue, training, Township tasks, asking first, combat and the panel. Paste it into the console with the mod loaded and run `await AQTests.run()`.
+
 ## 2.0.0
 - Skill Trainer and Township Task Helper are part of Action Queue again. It's one mod now, so you only need this one. If you still have Skill Trainer or Township Task Helper installed, uninstall them, the queue tells you if it finds them.
 - Everything they did is still here: the Train window (chart button), the green play buttons on Township tasks, and the queue.
