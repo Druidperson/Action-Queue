@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.1
+- Fixed: Alt Magic goals asked you to equip a magic weapon. The queue now only asks for a weapon when nothing else can train the skill.
+- Farming harvests a crop that's already grown before it offers to buy compost, so you don't buy compost the goal ends up not needing.
+- The Slayer roll window is clearer about what happens when the task you get isn't safe for you.
+
 ## 1.0.0
 - First release. Action Queue is the queue, panel and runner that Skill Trainer and Township Task Helper used to each have their own copy of. Now both mods add their steps to this one queue, so they work side by side.
 - Runs gathering, crafting, level and XP goals, fights, Farming, Agility, Cartography (paper and surveying), Archaeology, Thieving, Astrology, Magic and Summoning steps.
