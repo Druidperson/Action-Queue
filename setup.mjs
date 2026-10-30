@@ -1089,12 +1089,6 @@ export function setup(ctx) {
     // an Agility goal fills the empty slots of your course first (you confirm each obstacle)
     const picks = skill.id === AGILITY && !e.forced ? agilityPicks(e.noBuild) : [];
     if (picks.length) return { ok: true, entries: buildSteps(picks, e.id), note: `building your course first (${plural(picks.length, "obstacle")})` };
-    // Attack, Strength, Ranged and Magic need the right weapon: switch to a set that has one, or wait for you to equip it
-    if (weaponGap(skill)) {
-      const i = setFor(skill), w = WEAPON[skill.id];
-      return { ok: true, entries: [{ kind: "ask", what: "equip", skillId: skill.id, actionId: w, set: i, qty: 1, parent: e.id, label: i >= 0 ? `Switch to equipment set ${i + 1} (${w})` : `Equip a ${w} weapon` }],
-        note: i >= 0 ? `switching to equipment set ${i + 1} first` : `waiting for you to equip a ${w} weapon` };
-    }
     // a Slayer goal with no task asks about rolling one
     if (skill.id === SLAYER && !e.noTask && !hasTask()) {
       const t = slayerTier();
@@ -1121,6 +1115,12 @@ export function setup(ctx) {
     };
     const b = trainPlan(skill, e.targetLevel, e.forced).batches[0];
     if (!b) {
+      // Attack, Strength, Ranged and Magic need the right weapon: switch to a set that has one, or wait for you to equip it
+      if (weaponGap(skill)) {
+        const i = setFor(skill), w = WEAPON[skill.id];
+        return { ok: true, entries: [{ kind: "ask", what: "equip", skillId: skill.id, actionId: w, set: i, qty: 1, parent: e.id, label: i >= 0 ? `Switch to equipment set ${i + 1} (${w})` : `Equip a ${w} weapon` }],
+          note: i >= 0 ? `switching to equipment set ${i + 1} first` : `waiting for you to equip a ${w} weapon` };
+      }
       const fm = e.forced && methodById(skill, e.forced), why = blockedWhy(skill);
       return fail(fm ? `${fm.name} can't be trained by the queue at level ${skill.level}` : why ? `nothing at ${nm(skill)} level ${skill.level} can be trained right now: ${why}`
         : `nothing at ${nm(skill)} level ${skill.level} can be trained by the queue on its own (it may need shop items or monster drops)`);
