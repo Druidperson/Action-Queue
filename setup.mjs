@@ -1,7 +1,7 @@
 // Action Queue: one shared queue for Melvor Idle mods. It plans, runs and shows the steps that Skill Trainer and
 // Township Task Helper add, so the two mods work side by side.
 export function setup(ctx) {
-  const VERSION = "1.0.1", TAG = "[Action Queue]";
+  const VERSION = "1.1.0", TAG = "[Action Queue]";
 
   // ---------- small helpers ----------
   const list = (r) => r?.allObjects ?? (r?.registeredObjects ? [...r.registeredObjects.values()] : []);

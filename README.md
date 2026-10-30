@@ -19,7 +19,7 @@ Some steps cost something or change your game, so the queue stops and asks first
 - Rolling a Slayer task
 - Making a dig site map
 
-Press Skip and it carries on without it.
+Press Skip and it carries on without it. If you'd rather not click for shop purchases, turn on "Buy from the shop without asking" in the mod settings or with the cart button on the panel.
 
 ## Safe while you're away
 
