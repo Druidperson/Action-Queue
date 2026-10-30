@@ -1053,17 +1053,15 @@ export function setup(ctx) {
   };
   // why nothing at this level can be trained, when it comes down to gear, requirements or safety (no food, say)
   const blockedWhy = (skill) => {
-    for (const m of methodsOf(skill)) {
+    // skill actions first, fights after: Alt Magic short on runes says so before Magic combat asks for a staff
+    for (const m of [...methodsOf(skill)].sort((a, b) => !!a.actor - !!b.actor)) {
       if (m.level > skill.level) continue;
       const need = m.need?.();
       if (need) return need;
       const safe = m.xp > 0 && m.safe?.();
       if (safe && !safe.ok) return `it isn't safe while you're away (${safe.why})`;
-    }
-    // otherwise, something every open method needs that the queue can't get (Nature Runes before Runecrafting 44, say)
-    for (const m of methodsOf(skill)) {
-      if (m.level > skill.level || !(m.xp > 0) || m.actor) continue;
-      const k = (m.options[0]?.costs ?? []).find((c) => owned(c.item) < c.quantity && !isFinite(makeTime(c.item, c.quantity).ms));
+      // something it needs that the queue can't get (Nature Runes before Runecrafting 44, say)
+      const k = m.xp > 0 && !m.actor && (m.options[0]?.costs ?? []).find((c) => owned(c.item) < c.quantity && !isFinite(makeTime(c.item, c.quantity).ms));
       if (k) return `${m.name} needs ${nm(k.item)}, which you don't have and the queue can't get on its own yet`;
     }
     return null;
