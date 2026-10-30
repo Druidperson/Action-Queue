@@ -1060,6 +1060,12 @@ export function setup(ctx) {
       const safe = m.xp > 0 && m.safe?.();
       if (safe && !safe.ok) return `it isn't safe while you're away (${safe.why})`;
     }
+    // otherwise, something every open method needs that the queue can't get (Nature Runes before Runecrafting 44, say)
+    for (const m of methodsOf(skill)) {
+      if (m.level > skill.level || !(m.xp > 0) || m.actor) continue;
+      const k = (m.options[0]?.costs ?? []).find((c) => owned(c.item) < c.quantity && !isFinite(makeTime(c.item, c.quantity).ms));
+      if (k) return `${m.name} needs ${nm(k.item)}, which you don't have and the queue can't get on its own yet`;
+    }
     return null;
   };
   const trainPlan = (skill, target, forcedId, fromLevel = skill.level, fromXp = skill.xp ?? 0, seed = null) => {
