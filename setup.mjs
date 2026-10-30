@@ -1143,7 +1143,9 @@ export function setup(ctx) {
     for (const x of entries) x.parent = e.id;
     // Farming: offer to buy compost so every crop grows (skip it once and this goal plants without)
     const comp = itemById(COMPOST);
-    if (skill.id === FARMING && !e.noCompost && shopFor(comp) && owned(comp) < compostPer())
+    // (not while this crop is already growing or ready to pick: the harvest may be all the goal needs)
+    const busy = skill.id === FARMING && openPlots(skill, m.a).some((p) => p.plantedRecipe === m.a && (p.state === PLOT.growing || p.state === PLOT.grown));
+    if (skill.id === FARMING && !busy && !e.noCompost && shopFor(comp) && owned(comp) < compostPer())
       entries.unshift({ kind: "ask", what: "buy", optional: true, itemId: COMPOST, qty: Math.ceil(actions * m.succ) * compostPer(), parent: e.id, label: "Buy compost for your crops" });
     return { ok: true, entries, to: b.to, note };
   };
