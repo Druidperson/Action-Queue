@@ -5,7 +5,7 @@
 //   3. Township tasks: the green play buttons on Township tasks, which plan a task and add its steps
 // The parts talk through `parts` below. Other mods still reach the queue as mod.api.actionQueue (or window.actionQueue).
 export function setup(ctx) {
-  const VERSION = "2.1.0";
+  const VERSION = "2.2.0";
   const parts = { aq: null, st: null, installed: false };
 
   // ======================================================================================================================
@@ -314,8 +314,10 @@ export function setup(ctx) {
             const xpNow = Math.floor(sk.xp ?? 0);
             cur.stall = cur.lastXp !== undefined && xpNow <= cur.lastXp ? (cur.stall ?? 0) + 1 : 0;
             cur.lastXp = xpNow;
-            if (cur.stall >= 2) return this.block(cur, "training isn't giving any XP, so the plan stopped. Check the steps above it");
             const nb = T.plan(cur);
+            // steps that make training possible (finding a dig site) give no XP of their own
+            if (nb.ok && nb.setup) cur.stall = 0;
+            if (cur.stall >= 2) return this.block(cur, "training isn't giving any XP, so the plan stopped. Check the steps above it");
             if (!nb.ok) return this.block(cur, nb.reason);
             cur.now = nb.note; if (nb.to !== undefined) cur.afterLevel = nb.to;
             Queue.insertBefore(cur.id, nb.entries);
@@ -352,6 +354,8 @@ export function setup(ctx) {
             return this.setState("paused", `Your turn: ${A.turn(cur, t)}`);
           }
           if (cur.kind !== "manual" && !T) return this.block(cur, NO_TRAINER);
+          // the trainer can say a step has done its job (a hex is surveyed) whatever its count says
+          if (cur.kind !== "manual" && T.done?.(cur)) { this.finish(cur); continue; }
 
           // a different entry is now on top (we just started, or something was added above): switch to it
           if (this.activeId !== cur.id) {
@@ -748,6 +752,10 @@ export function setup(ctx) {
         const t = sp.specialCost?.type, fixed = sp.fixedItemCosts ?? [], base = { qty: sp.productionRatio ?? 1, ms: skill.baseInterval ?? 2000, succ: 1 };
         if (t === -5 && sp.produces && typeof sp.produces === "object")
           return [method(skill, sp, { ...base, product: sp.produces, get options() { return [{ costs: [...runes(sp), ...fixed], mult: 1 }]; }, start: cast(sp) })];
+        // Rags to Riches II and III only take runes and give a random gem, so they train Magic like any rune-only spell
+        // (the Township part also counts them as a way to get gems)
+        if (t === -5 && (sp.produces === -3 || sp.produces === -4))
+          return [method(skill, sp, { ...base, product: null, own: true, get options() { return [{ costs: [...runes(sp), ...fixed], mult: 1 }]; }, start: cast(sp) })];
         // spells that use up an item you pick (Just Learning, Item Alchemy): cast them on whatever the queue can get the
         // quickest, so the item counts as part of the work. Alchemy turns it into GP as well.
         if (t === -1) return [method(skill, sp, {
@@ -808,6 +816,9 @@ export function setup(ctx) {
     // you've unlocked, with seeds you own, waits, and harvests. One planting is one attempt; plots grow side by side.
     const PLOT = { empty: 1, growing: 2, grown: 3, dead: 4 };
     const openPlots = (f, r) => { let p = []; try { p = [...(f.getPlotsForCategory(r.category) ?? [])]; } catch (e) { /* use the list */ } return (p.length ? p : list(f.plots).filter((x) => x.category === r.category)).filter((x) => x.state !== 0); };
+    // the next locked plot of this kind you have the level for: a Farming step can ask to unlock it (it costs GP)
+    const lockedPlot = (f, r) => list(f.plots).find((x) => x.category === r.category && x.state === 0 && (x.level ?? 1) <= f.level && !((x.abyssalLevel ?? 0) > (f.abyssalLevel ?? 0)));
+    const plotCosts = (f, p) => costsOf(f.getPlotUnlockCosts(p));
     const growMs = (f, r) => { try { return f.modifyInterval(r.baseInterval, r) || r.baseInterval; } catch (e) { return r.baseInterval; } };
     const seedCost = (f, r) => { try { return f.getRecipeSeedCost(r); } catch (e) { return r.seedCost?.quantity ?? 1; } };
     // without compost a crop only grows about half the time, and a dead crop gives nothing. Compost you own goes on a plot
@@ -846,8 +857,8 @@ export function setup(ctx) {
       // XP per planting: base XP when planted (for some kinds), then base XP per crop (or once) when a grown crop is harvested.
       // The planner counts xp x succ as the average, so the planting part is divided back out.
       get xp() { const b = r.baseExperience ?? 0; return (r.category?.giveXPOnPlant ? b / this.succ : 0) + b * (r.category?.scaleXPWithQuantity ? r.baseQuantity ?? 1 : 1); },
-      get ms() { const n = openPlots(s, r).length; return n ? growMs(s, r) / n : Infinity; },
-      need: () => (openPlots(s, r).length ? null : `needs an unlocked ${nm(r.category)} plot`),
+      get ms() { const n = openPlots(s, r).length || (lockedPlot(s, r) ? 1 : 0); return n ? growMs(s, r) / n : Infinity; },
+      need: () => (openPlots(s, r).length || lockedPlot(s, r) ? null : `needs an unlocked ${nm(r.category)} plot`),
       tick: (e) => farmTick(s, r, e), start: () => fail("Farming steps plant and harvest instead"),
     });
     // Archaeology digs at sites that have a map with charges and tools picked. An Archaeology goal with no map offers to make
@@ -858,14 +869,64 @@ export function setup(ctx) {
       need: () => (s.canExcavate?.(site) ? null : `needs a map for ${nm(site)} with charges, and your tools picked (maps come from Cartography)`),
       check: () => (site.selectedMap?.charges > 0 ? null : { why: `the ${nm(site)} map is out of charges` }), start: () => s.startDigging(site),
     });
-    // every tool goes on a site that has a map but no tools picked yet
-    const pickTools = (site) => { const ar = game.archaeology; if (site.selectedMap && !site.selectedTools?.length) for (const t of list(ar.tools)) try { ar.setToolAsActive(site, t); } catch (e) { /* tool not available */ } };
+    // a site with maps but none picked uses the one with the most charges (finding a site gives you one), and every tool
+    // goes on a site that has a map but no tools picked yet
+    const pickTools = (site) => {
+      const ar = game.archaeology;
+      if (!site.selectedMap && site.maps?.length) { const i = site.maps.reduce((b, m, j) => ((m.charges ?? 0) > (site.maps[b].charges ?? 0) ? j : b), 0); if (site.maps[i].charges > 0) try { ar.setMapAsActive(site, i); } catch (e) { /* ignore */ } }
+      if (site.selectedMap && !site.selectedTools?.length) for (const t of list(ar.tools)) try { ar.setToolAsActive(site, t); } catch (e) { /* tool not available */ }
+    };
     // the dig site to make a map for: found on the map, open at your level, room for another map, best XP first
     const mapSite = () => {
       const ar = game.archaeology, sites = list(ar?.actions).filter((x) => realmOk(x) && lvl(x) <= ar.level && x.maps.length < (x.getMaxMaps?.() ?? 1));
       const found = sites.filter((x) => x.poi?.isDiscovered).sort((a, b) => xpRate(methodById(ar, b.id)) - xpRate(methodById(ar, a.id)));
       return { site: found[0] ?? null, hidden: sites.length > 0 && !found.length };
     };
+    // ---------- finding a dig site ----------
+    // A dig site has to be found on the Cartography map before a map can be made for it. You can only survey the hexes
+    // next to where you stand, so the queue works toward the site one hex at a time: survey the next hex on the way,
+    // travel onto it, and so on, then survey the site's own hex and travel onto it, which discovers it. Travelling can
+    // cost GP, and the queue asks you first when it does.
+    const CARTO = "melvorAoD:Cartography";
+    const cmap = () => game.cartography?.activeMap;
+    const atHex = (h) => { const p = cmap()?.playerPosition; return !!p && !!h && p.q === h.q && p.r === h.r; };
+    const hexDist = (a, b) => { const dq = a.q - b.q, dr = a.r - b.r; return (Math.abs(dq) + Math.abs(dr) + Math.abs(dq + dr)) / 2; };
+    const canStep = (h) => !h.isWater && (h.cartographyLevel ?? 1) <= game.cartography.level && game.checkRequirements(h.requirements ?? []);
+    const hexOf = (e) => { try { return cmap().getHex({ q: e.hexQ, r: e.hexR }) ?? null; } catch (err) { return null; } };
+    // the dig site to look for: open at your level and not found yet, lowest level first, then the closest
+    const hiddenSite = () => {
+      const ar = game.archaeology, p = cmap()?.playerPosition;
+      if (!p) return null;
+      return list(ar?.actions).filter((x) => realmOk(x) && lvl(x) <= ar.level && x.poi?.hex && !x.poi.isDiscovered).sort((a, b) => lvl(a) - lvl(b) || hexDist(a.poi.hex, p) - hexDist(b.poi.hex, p))[0] ?? null;
+    };
+    // the next thing to do on the way: { hop: "survey" | "travel", hex }, or { why } when there's no way
+    const digRoute = (site) => {
+      const map = cmap(), t = site?.poi?.hex;
+      if (!map || !t) return { why: "the Cartography map isn't available" };
+      if (t.isFullySurveyed) return { hop: "travel", hex: t };
+      const d0 = hexDist(map.playerPosition, t);
+      if (d0 <= map.surveyRange) return canStep(t) ? { hop: "survey", hex: t } : { why: `the hex ${nm(site)} is on needs Cartography level ${t.cartographyLevel}` };
+      const next = map.getHexesInRange(map.playerPosition, map.surveyRange).filter((h) => !atHex(h) && canStep(h) && hexDist(h, t) < d0)
+        .sort((a, b) => hexDist(a, t) - hexDist(b, t) || b.isFullySurveyed - a.isFullySurveyed)[0];
+      if (!next) return { why: `there's no way toward ${nm(site)} from where you are on the map` };
+      return { hop: next.isFullySurveyed ? "travel" : "survey", hex: next };
+    };
+    const routeStep = (site, parent) => {
+      const r = digRoute(site);
+      if (!r.hop) return r;
+      const h = r.hex, onSite = h === site.poi.hex, base = { skillId: CARTO, hexQ: h.q, hexR: h.r, parent, site: site.id };
+      return { entry: r.hop === "survey"
+        ? { ...base, kind: "skill", actionId: "cartography:survey", qty: 1e12, label: onSite ? `Cartography: survey ${nm(site)}` : `Cartography: survey a hex on the way to ${nm(site)}` }
+        : { ...base, kind: "ask", what: "travel", qty: 1, label: onSite ? `Cartography: travel to ${nm(site)}` : `Cartography: travel toward ${nm(site)}` } };
+    };
+    // what a trip costs (null when the game finds no path)
+    const travelCost = (h) => {
+      const map = cmap();
+      try { map.selectHex(h); const path = map.selectedHexPath; return path?.length ? costsOf(game.cartography.getTravelCosts(path)) : null; } catch (e) { return null; } finally { try { map.deselectHex(); } catch (e) { /* ignore */ } }
+    };
+    // the game pops a window when a hex with a dig site is surveyed; the queue travels there itself, so it closes it
+    const closePoiPop = () => { try { if (SwalLocale.isVisible() && /Point of Interest/i.test(SwalLocale.getTitle()?.textContent ?? "")) SwalLocale.close(); } catch (e) { /* ignore */ } };
+
     // Agility runs the course you've built; a lap gives the XP of every obstacle. The course builder below fills empty slots.
     const AGILITY = "melvorD:Agility";
     const agilityMethods = (s) => {
@@ -915,7 +976,11 @@ export function setup(ctx) {
       get xp() { const h = surveyHex(s); return h ? Number(s.getSkillXPForHexSurveyAction?.(h)) || (h.cartographyLevel ?? 1) * 2.6 : 0; },
       get ms() { return s.surveyInterval ?? 5000; },
       need: () => (surveyHex(s) ? null : "there's nothing left to survey in range of where you are on the map. Move somewhere new first"),
-      start: () => { const h = surveyHex(s); if (!h) return fail("nothing left to survey nearby"); s.autoSurveyOnClick(h); },
+      // a step with a hex (on the way to a dig site) surveys that one, otherwise it surveys around where you stand
+      start: (e) => {
+        if (e?.hexQ !== undefined) { const h = hexOf(e); if (!h) return fail("that hex wasn't found on the map"); if (!s.isHexInQueue?.(h)) s.surveyOnClick(h); return; }
+        const h = surveyHex(s); if (!h) return fail("nothing left to survey nearby"); s.autoSurveyOnClick(h);
+      },
     })];
     const WHOLE = { [MAGIC]: (s) => magicMethods(s), "melvorD:Agility": agilityMethods, "melvorAoD:Cartography": cartographyMethods };
 
@@ -1177,11 +1242,13 @@ export function setup(ctx) {
     const SOURCES = [];
     // Queue entries: "kind" is what the runner does; qty is how many MORE of the item to end up with
     // (for "manual" entries it is how many you should own).
-    const toEntries = (rows) => rows.map((n) => {
+    const plotAsk = (f, r) => { const p = !openPlots(f, r).length && lockedPlot(f, r); return p ? [{ kind: "ask", what: "plot", skillId: f.id, actionId: p.id, qty: 1, label: `Farming: unlock a ${nm(r.category)} plot` }] : []; };
+    const toEntries = (rows) => rows.flatMap((n) => {
       const base = { itemId: n.item.id, qty: n.qty }, c = n.recipe?.c, g = !c && gatherer(n.item.id);
-      if (c) return { ...base, kind: "craft", skillId: c.skill.id, actionId: c.a.id, altIndex: 0, label: `${nm(c.skill)}: make ${nm(n.item)}` };
+      if (c) return [...(c.skill.id === FARMING ? plotAsk(c.skill, c.a.a) : []), { ...base, kind: "craft", skillId: c.skill.id, actionId: c.a.id, altIndex: 0, label: `${nm(c.skill)}: make ${nm(n.item)}` }];
       if (g) return { ...base, kind: "gather", skillId: g.skill.id, actionId: g.a.id, label: `${nm(g.skill)}: gather ${nm(n.item)}` };
-      for (const fn of SOURCES) { const x = fn(n.item, n.qty); if (x) return { ...base, ...x }; }
+      // a source can need steps first (the Bird Nests to open, say)
+      for (const fn of SOURCES) { const x = fn(n.item, n.qty); if (x) { const { before, ...rest } = x; return [...(before ?? []), { ...base, ...rest }]; } }
       // qty for a buy step is how many you should own, like a manual step
       if (shopOnly(n.item)) return { ...base, qty: owned(n.item) + n.qty, kind: "ask", what: "buy", label: `Buy ${nm(n.item)}` };
       return { ...base, qty: n.need ?? n.qty, kind: "manual", label: `Get ${nm(n.item)}`, note: MANUAL_NOTE };
@@ -1223,6 +1290,36 @@ export function setup(ctx) {
     // waits for you to equip the right weapon).
     const popHtml = (o, rows, foot) => step(`<div class="aq-title">${icon(o)}<b>${esc(nm(o))}</b></div>${rows}`) + note(foot);
     const ASKS = {
+      travel: {
+        icon: () => skillById(CARTO),
+        target: (e) => hexOf(e),
+        done: (e, h) => (atHex(h) ? "You're there" : null),
+        cannot: (e, h) => { const c = travelCost(h); return !c ? "the game can't find a way there on the map" : c.c.checkIfOwned() ? null : `you can't pay for the trip right now (${costText(c)})`; },
+        // a free trip just happens; one that costs something asks you first
+        auto: (e) => { const c = travelCost(hexOf(e)); return !!c && !c.cur.length && !c.items.length; },
+        act: (e, h) => {
+          const s = game.cartography, map = cmap(), cost = travelCost(h);
+          if (game.activeAction === s) s.stop();
+          map.selectHex(h); s.travelOnClick(); closePoiPop();
+          return atHex(h) ? `Travelled${cost && (cost.cur.length || cost.items.length) ? ` for ${costText(cost)}` : ""}` : "On the way";
+        },
+        turn: (e) => `confirm the trip on the Cartography map, or skip it.`,
+        pop: (e, h) => {
+          const site = list(game.archaeology?.actions).find((x) => x.id === e.site), onSite = site && site.poi?.hex === h, c = travelCost(h);
+          return { title: "Travel on the map?", yes: "Travel", html: popHtml(skillById(CARTO), chips(chip(onSite ? `To ${esc(nm(site))}` : `One hex closer to ${site ? esc(nm(site)) : "the dig site"}`)) +
+            chips(chip("<b>Costs</b>", "lbl"), chip(esc(c ? costText(c) : "unknown"))), onSite ? "Arriving there discovers the dig site, so the queue can make a map for it." : "The queue can only survey next to where you stand, so it moves one hex at a time.") };
+        },
+      },
+      plot: {
+        icon: () => skillById(FARMING),
+        target: (e) => list(game.farming?.plots).find((x) => x.id === e.actionId),
+        done: (e, p) => (p.state !== 0 ? "Unlocked" : null),
+        cannot: (e, p) => (game.farming.level < (p.level ?? 1) ? `needs Farming level ${p.level}` : game.farming.getPlotUnlockCosts(p).checkIfOwned() ? null : `you can't pay for the plot right now (${costText(plotCosts(game.farming, p))})`),
+        act: (e, p) => { game.farming.unlockPlotOnClick(p); return p.state !== 0 ? "Unlocked" : { block: "the game didn't unlock the plot" }; },
+        turn: (e, p) => `confirm unlocking a ${nm(p.category)} plot, or skip it.`,
+        pop: (e, p) => ({ title: "Unlock a Farming plot?", yes: "Unlock", html: popHtml(skillById(FARMING), chips(chip(`${esc(nm(p.category))} plot`), chip(`Farming level ${p.level ?? 1}`)) +
+          chips(chip("<b>Costs</b>", "lbl"), chip(esc(costText(plotCosts(game.farming, p))))), "Unlocking can't be undone. Skip leaves it locked, and the Farming step after it waits for a plot.") }),
+      },
       build: {
         target: (e) => list(game.agility?.actions).find((x) => x.id === e.actionId),
         done: (e, o) => { const there = o.course?.builtObstacles?.get(o.category) ?? game.agility.activeCourse.builtObstacles.get(o.category); return there ? (there === o ? "Already built" : `Slot already has ${nm(there)}`) : null; },
@@ -1328,7 +1425,7 @@ export function setup(ctx) {
         if (r) return r;
       } catch (err) { return fail("error: " + err.message); }
       if (m.active ? m.active() : skill.isActive) return { ok: true };
-      const costly = (m.options[e.altIndex ?? 0] ?? m.options[0]).costs.length > 0 && e.kind !== "gather";
+      const costly = (m.options[e.altIndex ?? 0] ?? m.options[0]).costs.length > 0 && (e.kind !== "gather" || e.yieldPer > 0);
       return fail(costly ? "not enough materials (or level too low)" : "the game wouldn't start it", { noMaterials: costly && m.level <= skill.level });
     };
 
@@ -1338,7 +1435,7 @@ export function setup(ctx) {
       const m = methodById(skillById(e.skillId), e.actionId), item = itemById(e.itemId), name = e.kind === "skill" ? m?.name : nm(item);
       if (!m || (e.kind !== "skill" && !item)) return fail("this action wasn't found in your game version");
       const opt = m.options[e.altIndex ?? 0] ?? m.options[0], remaining = e.qty - A.runner.gained(e);
-      const crafts = Math.max(1, Math.ceil(remaining / (e.kind === "skill" ? Math.max(1e-9, m.xp * m.succ) : perAttempt(m, opt))));
+      const crafts = Math.max(1, Math.ceil(remaining / (e.kind === "skill" ? Math.max(1e-9, m.xp * m.succ) : e.yieldPer > 0 ? e.yieldPer : perAttempt(m, opt))));
       const entries = materialSteps(opt.costs, crafts, e.parent ?? e.id);
       if (!entries) return fail(`${name} needs something the queue can't get on its own`);
       return entries.length ? { ok: true, entries, remaining, crafts, name } : fail("not enough materials (or level too low)");
@@ -1356,11 +1453,15 @@ export function setup(ctx) {
 
     // time (ms) to get n of an item from scratch with things the queue can do itself; Infinity if it can't.
     // Also returns the XP those steps give in `skillId` (smelting bars trains Smithing too).
+    // average ms per item from another mod part's drop source (Township part: monster drops, gems, Stardust), worked out
+    // once a second since the planner asks often
+    const dropMs = (item) => perSec(`drop|${item.id}`, () => { for (const fn of SOURCES) { try { const x = fn(item, 1); if (x?.unitMs > 0) return x.unitMs; } catch (e) { /* no source */ } } return 0; });
     const makeTime = (item, n, lv, skillId, seen = new Set(), depth = 0) => {
       if (!(n > 0)) return { ms: 0, xp: 0 };
       const NO = { ms: Infinity, xp: 0 }, c = crafter(item.id), g = !c && gatherer(item.id), x = c || g;
-      // buying from the shop takes no time (you still confirm each purchase)
-      if (!x) return buyLeft(item) >= n ? { ms: 0, xp: 0 } : NO;
+      // buying from the shop takes no time (you still confirm each purchase); a drop (seeds from a monster, say) takes its
+      // average time per item
+      if (!x) { if (buyLeft(item) >= n) return { ms: 0, xp: 0 }; const u = dropMs(item); return u > 0 ? { ms: u * n, xp: 0 } : NO; }
       if (depth > 10 || seen.has(item.id) || !x || x.a.level > levelIn(x.skill, lv) || x.a.need?.(lv)) return NO;
       if (g) { const acts = n / Math.max(1, g.a.qty); return { ms: acts * g.a.ms, xp: g.skill.id === skillId ? acts * g.a.xp : 0 }; }
       const opt = c.a.options[0], crafts = n / perAttempt(c.a, opt); // attempts, not rounded: ranks methods by their steady rate
@@ -1482,7 +1583,11 @@ export function setup(ctx) {
         for (const s of list(skill.actions)) pickTools(s);
         if (!e.noMap && !list(skill.actions).some((s) => lvl(s) <= skill.level && skill.canExcavate?.(s))) {
           const { site, hidden } = mapSite();
-          if (!site && hidden) return fail("you haven't found a dig site you can map yet. Survey the map in Cartography to find one");
+          if (!site && hidden) {
+            const hs = hiddenSite(), r = hs && routeStep(hs, e.id);
+            if (r?.entry) return { ok: true, setup: true, entries: [r.entry], note: `looking for ${nm(hs)} on the map` };
+            return fail(`you haven't found a dig site you can map yet${r?.why ? `: ${r.why}` : ". Survey the map in Cartography to find one"}`);
+          }
           if (site) {
             const mats = materialSteps(costsOf(game.cartography.getMapCreationCosts(site)).items, 1, e.id);
             if (!mats) return fail(`a map for ${nm(site)} needs something the queue can't get on its own`);
@@ -1559,7 +1664,12 @@ export function setup(ctx) {
         return i >= 0 ? `Your equipment set ${i + 1} has a ${w} weapon. This goal switches to it first and back when it's done.` : `You don't have a ${w} weapon on. When this goal starts it waits for you to equip one.`;
       }
       if (sk.id === SLAYER && !hasTask()) { const t = slayerTier(); if (t) return `You have no Slayer task. This goal asks you before rolling ${aOr(nm(t.c))} task (${t.safe.length} of its ${t.mons.length} monsters are safe for you).`; }
-      if (sk.id === ARCH && !list(sk.actions).some((s) => lvl(s) <= sk.level && sk.canExcavate?.(s))) { const { site } = mapSite(); if (site) return `You have no map to dig with. This goal makes a map for ${nm(site)} first, once you confirm it.`; }
+      if (sk.id === ARCH && !list(sk.actions).some((s) => lvl(s) <= sk.level && sk.canExcavate?.(s))) {
+        const { site, hidden } = mapSite();
+        if (site) return `You have no map to dig with. This goal makes a map for ${nm(site)} first, once you confirm it.`;
+        const hs = hidden && hiddenSite();
+        if (hs && routeStep(hs).entry) return `You haven't found a dig site yet. This goal surveys its way to ${nm(hs)} in Cartography first, asking before any trip that costs GP, then makes a map.`;
+      }
       return null;
     };
 
@@ -1586,6 +1696,8 @@ export function setup(ctx) {
       restock: (e) => restockCraft(e),
       plan: (e) => nextBatch(e),
       trainFinished: (e) => restoreSet(e),
+      // a survey step on the way to a dig site is done once its hex is
+      done: (e) => { if (e.actionId !== "cartography:survey" || e.hexQ === undefined) return false; const h = hexOf(e); if (h && !h.isFullySurveyed) return false; closePoiPop(); return true; },
       halt: () => restoreCombat(),
       changed: () => secMemo.m.clear(),
       // ms per unit (item, XP or kill), or the whole time for a goal
@@ -1746,7 +1858,7 @@ export function setup(ctx) {
       // other mods can say where an item comes from (monster drops, gems): fn(item, qty) returns a step, or nothing
       addSource: (fn) => { if (typeof fn === "function") SOURCES.push(fn); },
       openTrain: () => openTrain(),
-      _dev: { Trainer, secMemo, startAction, restockCraft },
+      _dev: { Trainer, secMemo, startAction, restockCraft, hiddenSite, digRoute, routeStep },
     };
     window.skillTrainer = API;
     parts.st = API;
@@ -1823,7 +1935,17 @@ export function setup(ctx) {
     try {
       if (a.realm && a.realm.id !== MELVOR_REALM) return out;
       const mods = () => game.modifiers ?? {};
-      if (skill.id === "melvorD:Mining" && a.giveGems && game.randomGemTable?.drops) {
+      // byproducts: Firemaking gives Ash, Charcoal (and Coal) as you burn logs, Cooking sometimes makes a Perfect dish.
+      // These steps use up logs or raw food, and get more when they run out like any crafting step.
+      if (skill.id === "melvorD:Firemaking" && Array.isArray(a.primaryProducts)) {
+        for (const it of a.primaryProducts) if (it?.id) out.push({ id: it.id, pct: () => { try { const r = skill.getPrimaryProductInfo(it, a); return Number(r.chance) * Math.max(1, Number(r.quantity) || 1); } catch (e) { return 0; } } });
+      } else if (skill.id === "melvorD:Cooking" && a.perfectItem?.id) {
+        out.push({ id: a.perfectItem.id, pct: () => { try { return Number(skill.getRecipePerfectChance(a)) * succ(skill, a); } catch (e) { return 0; } } });
+      } else if (skill.id === "melvorD:Magic" && a.specialCost?.type === -5 && (a.produces === -3 || a.produces === -4)) {
+        const tbl = a.produces === -3 ? game.randomGemTable : game.randomSuperiorGemTable;
+        const tw = tbl?.totalWeight || (tbl?.drops ?? []).reduce((t, d) => t + d.weight, 0);
+        for (const d of tbl?.drops ?? []) if (d?.item && tw > 0) out.push({ id: d.item.id, pct: () => 100 * (d.weight / tw) * (a.productionRatio ?? 1) });
+      } else if (skill.id === "melvorD:Mining" && a.giveGems && game.randomGemTable?.drops) {
         const tw = game.randomGemTable.totalWeight || game.randomGemTable.drops.reduce((t, d) => t + d.weight, 0);
         for (const d of game.randomGemTable.drops) if (d?.item) out.push({ id: d.item.id, pct: () => (1 + Number(mods().miningGemChance ?? 0)) * (1 + Number(mods().offItemChance ?? 0) / 100) * (d.weight / tw) });
       } else if (skill.id === "melvorD:Thieving") {
@@ -1880,7 +2002,7 @@ export function setup(ctx) {
   let idx = null;
   const buildIndex = () => {
     if (idx) return idx;
-    idx = { crafters: new Map(), gatherers: new Map(), randoms: new Map(), droppers: new Map(), shop: new Map() };
+    idx = { crafters: new Map(), gatherers: new Map(), randoms: new Map(), droppers: new Map(), shop: new Map(), openers: new Map() };
     for (const skill of list(game.skills)) {
       if (skill.id === MAGIC_ID) decorateSpells(skill);
       if (skill.id === "melvorD:Herblore") decorateHerblore(skill);
@@ -1890,7 +2012,19 @@ export function setup(ctx) {
         for (const rp of a.randomProducts ?? []) if (rp?.id) push(idx.randoms, rp.id, { skill, a });
         if (skill.id === ASTRO_ID && (!a.realm || a.realm.id === MELVOR_REALM)) for (const ri of a.randomItems ?? []) if (ri?.id) push(idx.randoms, ri.id, { skill, a });
         for (const x of specialDrops(skill, a)) push(idx.randoms, x.id, { skill, a, pct: x.pct });
+        // Thieving: a successful pickpocket rolls the target's loot table 75% of the time
+        if (skill.id === THIEVING_ID && a.lootTable) {
+          const drops = a.lootTable.drops ?? [], tw = Number(a.lootTable.totalWeight) || drops.reduce((t, d) => t + (d.weight || 0), 0);
+          for (const d of drops) if (d?.item && tw > 0) push(idx.randoms, d.item.id, { skill, a, thieve: true,
+            pct: () => (Number(skill.getNPCSuccessRate?.(a)) || 0) * ((skill.itemChance ?? 75) / 100) * (d.weight / tw) * (((d.minQuantity ?? 1) + (d.maxQuantity ?? 1)) / 2) });
+        }
       }
+    }
+    // things you open (Bird Nests, Herb Sacks, Stacks of Bones): what each one gives on average. Ones that need a key are left out.
+    for (const o of list(game.items)) {
+      const drops = o.dropTable?.drops ?? [], tw = Number(o.dropTable?.totalWeight) || drops.reduce((t, d) => t + (d.weight || 0), 0);
+      if (!drops.length || !(tw > 0) || o.keyItem) continue;
+      for (const d of drops) if (d?.item) push(idx.openers, d.item.id, { o, per: (d.weight / tw) * (((d.minQuantity ?? 1) + (d.maxQuantity ?? 1)) / 2) });
     }
     for (const m of list(game.monsters)) {
       const drops = m.lootTable?.drops ?? m.lootTable?._drops ?? [];
@@ -1976,7 +2110,7 @@ export function setup(ctx) {
 
   // ---------- Astrology: Stardust and Golden Stardust are random drops from studying a constellation ----------
   // Each constellation also boosts other skills, so the player picks one on purpose or lets the mod take the best XP per hour.
-  const ASTRO_ID = "melvorD:Astrology";
+  const ASTRO_ID = "melvorD:Astrology", THIEVING_ID = "melvorD:Thieving";
   const Astro = { pick: "best" }; // "best" or a constellation id; reset whenever a popup opens
   const astroSkill = () => skillById(ASTRO_ID);
   const astroCons = (item) => {
@@ -2039,7 +2173,9 @@ export function setup(ctx) {
       if (!(chance > 0)) { try { chance = Number(x.skill.randomProducts?.get?.(item)?.chance ?? 0); } catch (e) { /* ignore */ } }
       if (!(chance > 0)) continue;
       const ms = intervalMs(x.skill, x.a);
-      out.push({ type: "skill", skill: x.skill, a: x.a, id: "s:" + x.a.id, open: (x.a.level ?? 1) <= x.skill.level, level: x.a.level ?? 1,
+      // a Thieving target only counts when the queue would really run it (safe while you're away)
+      const safeOk = !x.thieve || (() => { try { return st()?.skills.methodById(x.skill, x.a.id)?.safe?.().ok !== false; } catch (e) { return false; } })();
+      out.push({ type: "skill", skill: x.skill, a: x.a, id: "s:" + x.a.id, open: (x.a.level ?? 1) <= x.skill.level && safeOk, level: x.a.level ?? 1, per: chance / 100,
         xpHr: ((x.a.baseExperience ?? 0) / ms) * 3600000, perHr: (3600000 / ms) * (chance / 100) });
     }
     return out.sort((a, b) => a.level - b.level);
@@ -2357,16 +2493,38 @@ export function setup(ctx) {
   };
   // A random drop runs as an Action Queue gather step: study a constellation, train a skill that drops it, or fight a monster
   // that drops it (safe fights only). unitMs is the average time per item, so the queue's time estimate is right.
+  // the best thing to open for an item: one the queue can get, ranked by time per item. Returns the steps that get the
+  // containers, then an "open" step.
+  const OPEN_DEPTH = { n: 0 };
+  const openEntry = (item, qty) => {
+    buildIndex();
+    if (OPEN_DEPTH.n > 0) return null; // no nests inside nests
+    let best = null;
+    OPEN_DEPTH.n++;
+    try {
+      for (const { o, per } of idx.openers.get(item.id) ?? []) {
+        if (!(per > 0) || o === item) continue;
+        const n = Math.max(1, Math.ceil(qty / per));
+        const g = st()?.items.gatherer(o.id), get = g ? { kind: "gather", skillId: g.skill.id, actionId: g.a.id, label: `${nm(g.skill)}: gather ${nm(o)}`, unitMs: g.a.ms / Math.max(1, g.a.qty) } : dropEntry(o, n);
+        if (!get || !(get.unitMs > 0)) continue;
+        const unitMs = get.unitMs / per;
+        if (!best || unitMs < best.unitMs) best = { unitMs, entry: { kind: "ask", what: "open", openId: o.id, openN: n, unitMs, label: `Open ${nm(o)} for ${nm(item)}`, before: [{ ...get, itemId: o.id, qty: n }] } };
+      }
+    } finally { OPEN_DEPTH.n--; }
+    return best?.entry ?? null;
+  };
   const dropEntry = (item, qty) => {
+    if (!isFarmItem(item) && !isAstroItem(item)) return openEntry(item, qty);
     if (isAstroItem(item)) {
       const ch = conChoice(item);
       if (ch) return { kind: "gather", skillId: ASTRO_ID, actionId: ch.c.id, unitMs: ch.perHr > 0 ? 3600000 / ch.perHr : undefined, label: `${nm(astroSkill())}: study ${nm(ch.c)} for ${nm(item)}` };
     }
     if (!isFarmItem(item)) return null;
     const o = farmPlan(item, false, qty).opt, fid = o?.type === "fight" && st()?.fightId(o.m);
-    if (o?.type === "skill") return { kind: "gather", skillId: o.skill.id, actionId: o.a.id, unitMs: o.perHr > 0 ? 3600000 / o.perHr : undefined, label: `${nm(o.skill)}: ${nm(o.a)} for ${nm(item)}` };
+    // yieldPer: how many each attempt gives, so a step that uses materials (burning logs for Ash) knows how many more to get
+    if (o?.type === "skill") return { kind: "gather", skillId: o.skill.id, actionId: o.a.id, unitMs: o.perHr > 0 ? 3600000 / o.perHr : undefined, yieldPer: o.per, label: `${nm(o.skill)}: ${nm(o.a)} for ${nm(item)}` };
     if (fid && o.safety.safe) return { kind: "gather", skillId: HITPOINTS, actionId: fid, unitMs: isFinite(o.ms) ? o.ms / Math.max(1, qty) : undefined, label: `Fight ${nm(o.m)} for ${nm(item)}` };
-    return null;
+    return openEntry(item, qty);
   };
 
   const AREA_KINDS = [
@@ -2772,6 +2930,16 @@ export function setup(ctx) {
     };
     // the queue can use what this mod knows about random drops when a recipe step runs short
     st().addSource((item, qty) => dropEntry(item, qty));
+    aq().addAsk("open", {
+      icon: (e) => itemById(e.openId),
+      target: (e) => { const o = itemById(e.openId); return o && { o }; },
+      done: () => null,
+      auto: () => true,
+      cannot: (e, t) => ((have(t.o) ?? 0) > 0 ? null : `you have no ${nm(t.o)} to open`),
+      act: (e, t) => { const n = Math.min(e.openN ?? 1, have(t.o) ?? 0); game.bank.processItemOpen(t.o, n); return `Opened ${num(n)} ${nm(t.o)}`; },
+      turn: (e, t) => `open ${nm(t.o)}.`,
+      hint: () => "opens them for you",
+    });
     refresh();
     window.townshipHelper = {
       version: VERSION,
