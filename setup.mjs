@@ -865,8 +865,13 @@ export function setup(ctx) {
       need: () => (s.canExcavate?.(site) ? null : `needs a map for ${nm(site)} with charges, and your tools picked (maps come from Cartography)`),
       check: () => (site.selectedMap?.charges > 0 ? null : { why: `the ${nm(site)} map is out of charges` }), start: () => s.startDigging(site),
     });
-    // every tool goes on a site that has a map but no tools picked yet
-    const pickTools = (site) => { const ar = game.archaeology; if (site.selectedMap && !site.selectedTools?.length) for (const t of list(ar.tools)) try { ar.setToolAsActive(site, t); } catch (e) { /* tool not available */ } };
+    // a site with maps but none picked uses the one with the most charges (finding a site gives you one), and every tool
+    // goes on a site that has a map but no tools picked yet
+    const pickTools = (site) => {
+      const ar = game.archaeology;
+      if (!site.selectedMap && site.maps?.length) { const i = site.maps.reduce((b, m, j) => ((m.charges ?? 0) > (site.maps[b].charges ?? 0) ? j : b), 0); if (site.maps[i].charges > 0) try { ar.setMapAsActive(site, i); } catch (e) { /* ignore */ } }
+      if (site.selectedMap && !site.selectedTools?.length) for (const t of list(ar.tools)) try { ar.setToolAsActive(site, t); } catch (e) { /* tool not available */ }
+    };
     // the dig site to make a map for: found on the map, open at your level, room for another map, best XP first
     const mapSite = () => {
       const ar = game.archaeology, sites = list(ar?.actions).filter((x) => realmOk(x) && lvl(x) <= ar.level && x.maps.length < (x.getMaxMaps?.() ?? 1));
