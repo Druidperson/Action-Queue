@@ -100,7 +100,7 @@
     has(items()[0].reason, "wasn't found");
   }));
   test(L, "every ask kind the training part adds is registered", () => sandbox(async () => {
-    for (const what of ["build", "slayer", "map", "equip", "buy"]) {
+    for (const what of ["build", "slayer", "map", "equip", "buy", "plot", "travel", "open"]) {
       Q().items = []; Q().save();
       add([{ kind: "ask", what, actionId: "x:none", itemId: "x:none", qty: 1, label: `ask ${what}` }]);
       A().runner.start(); await sleep(150);
@@ -570,6 +570,105 @@
     const sk = skill("Thieving"), p = S().plan.trainPlan(sk, sk.level + 1, null);
     if (!p.batches.length) { ok(S().plan.blockedWhy(sk), "no plan and no reason"); return; }
     const m = S().skills.methodById(sk, p.batches[0].c.a.id); ok(!m?.safe || m.safe().ok !== false, "picked an unsafe target");
+  });
+
+  // =================================================================================================================
+  const SR = "Sources";
+  test(SR, "a herb is planned from Farming, with an unlock step when no Herb plot is open", () => sandbox(async () => {
+    const f = game.farming, herb = item("melvorD:Garum_Herb"), plots = list(f.plots).filter((p) => p.category?.id === "melvorD:Herb");
+    const saved = plots.map((p) => p.state);
+    try {
+      // with every Herb plot locked (in memory only), the plan asks to unlock one first
+      for (const p of plots) p.state = 0;
+      const es = S().plan.toEntries(S().plan.buildRows(herb, have(herb) + 1));
+      ok(es.some((e) => e.kind === "craft" && e.skillId === "melvorD:Farming"), `no Farming step: ${es.map((e) => e.label)}`);
+      ok(es.some((e) => e.what === "plot"), `no unlock step: ${es.map((e) => e.label)}`);
+      eq(es.findIndex((e) => e.what === "plot") < es.findIndex((e) => e.skillId === "melvorD:Farming" && e.kind === "craft"), true, "unlock comes first");
+    } finally { plots.forEach((p, i) => { p.state = saved[i]; }); }
+  }));
+  test(SR, "the unlock-a-plot step asks first, and Skip spends nothing", () => sandbox(async () => {
+    const f = game.farming, p = list(f.plots).find((x) => x.state === 0 && (x.level ?? 1) <= f.level);
+    if (!p) skip("no locked plot at your Farming level");
+    const gp = game.gp.amount;
+    add([{ kind: "ask", what: "plot", skillId: "melvorD:Farming", actionId: p.id, qty: 1, label: "unlock test" }]);
+    A().runner.start(); await waitFor(() => /Farming plot/.test(swalTitle()), 4000, 100); await sleep(500);
+    has(swalTitle(), "Unlock a Farming plot"); has(SwalLocale.getPopup().textContent, "can't be undone");
+    swalButton(".swal2-cancel").click(); await sleep(800);
+    eq(p.state, 0, "the plot got unlocked"); eq(game.gp.amount, gp, "GP spent");
+  }));
+  test(SR, "Thieving loot counts as a source, but only from targets that are safe", () => {
+    const D = T()._dev, th = skill("Thieving");
+    const npc = list(th.actions).find((a) => (a.lootTable?.drops ?? []).length);
+    const it = npc.lootTable.drops[0].item;
+    const o = D.farmSkills(it).find((x) => x.skill === th && x.a === npc);
+    ok(o, `${npc.name} isn't listed as a source of ${it.name}`);
+    const safe = S().skills.methodById(th, npc.id)?.safe?.().ok !== false;
+    eq(o.open, (npc.level ?? 1) <= th.level && safe, "open should follow level and safety");
+  });
+  test(SR, "things you open are planned (get them, then open them)", () => {
+    const D = T()._dev;
+    const it = list(game.items).find((x) => { if (S().items.crafter(x.id) || S().items.gatherer(x.id) || D.isFarmItem(x)) return false; const e = D.dropEntry(x, 1); return e?.what === "open"; });
+    if (!it) skip("nothing here comes only from something you can open");
+    const e = D.dropEntry(it, 1);
+    ok(e.before?.length, "no steps to get the container"); ok(e.openId && e.openN > 0, "no open step");
+    const es = S().plan.toEntries(S().plan.buildRows(it, have(it) + 1));
+    eq(es[es.length - 1].what, "open", "open comes last"); ok(es.length >= 2, "the container step is missing");
+  });
+  test(SR, "an open step opens what the plan collected, without asking", () => sandbox(async () => {
+    const nest = item("melvorD:Bird_Nest"); if (!nest?.dropTable) skip("no Bird Nest");
+    give(nest.id, 2);
+    const before = have(nest);
+    add([{ kind: "ask", what: "open", openId: nest.id, openN: 2, itemId: nest.dropTable.drops[0].item.id, qty: 1, label: "Open test" }]);
+    A().runner.start(); await sleep(500);
+    ok(!swalOpen(), "it asked"); eq(items()[0].status, "done", items()[0].reason ?? R().message); eq(have(nest), before - 2, "nests opened");
+    bankUndo.pop(); // the nests are gone
+  }));
+  test(SR, "Ash and other byproducts plan as Firemaking, and Perfect dishes as Cooking", () => {
+    const D = T()._dev;
+    const ash = list(game.items).find((x) => x.name === "Ash"), shrimp = item("melvorD:Shrimp_Perfect");
+    if (ash) { const e = D.dropEntry(ash, 2); ok(e, "no source for Ash"); eq(e.skillId, "melvorD:Firemaking"); ok(e.yieldPer > 0, "no yield"); }
+    if (shrimp && game.cooking.getRecipePerfectChance(list(game.cooking.actions).find((a) => a.perfectItem === shrimp)) > 0) { const e = D.dropEntry(shrimp, 1); ok(e, "no source for a Perfect dish"); eq(e.skillId, "melvorD:Cooking"); }
+  });
+  test(SR, "a byproduct step gets its own logs when it runs out", () => sandbox(async () => {
+    liveOk();
+    const ash = list(game.items).find((x) => x.name === "Ash"); if (!ash) skip("no Ash");
+    const e = T()._dev.dropEntry(ash, 1); if (!e) skip("no source for Ash");
+    const m = S().skills.methodById(skill(e.skillId), e.actionId), logs = m.options[0].costs[0]?.item;
+    take(logs.id); const ash0 = have(ash);
+    bankUndo.push(() => { const q = have(ash) - ash0; if (q > 0) game.bank.removeItemQuantity(ash, q, false); });
+    add([{ ...e, itemId: ash.id, qty: 1 }]);
+    A().runner.start(); await sleep(1500);
+    ok(items().length > 1 && items()[0].itemId === logs.id, `didn't add a step for ${logs.name}: ${items().map((x) => x.label + " " + x.status + " " + (x.reason ?? "")).join("; ")}`);
+  }), { live: true });
+  test(SR, "an Archaeology goal with no dig site found surveys and travels toward one", () => {
+    const ar = game.archaeology, site = list(ar.actions).find((x) => x.poi?.hex), Dv = S()._dev;
+    const saved = list(ar.actions).map((x) => [x, x.poi?.isDiscovered, x.maps, x.selectedMapIndex]), can = ar.canExcavate;
+    let res;
+    try {
+      for (const [x] of saved) { if (x.poi) x.poi.isDiscovered = false; x.maps = []; x.selectedMapIndex = -1; }
+      ar.canExcavate = () => false;
+      res = Dv.Trainer.plan({ id: "g", kind: "train", skillId: ar.id, targetLevel: ar.level + 1, targetXp: S().skills.xpAt(ar.level + 1), qty: S().skills.xpAt(ar.level + 1) });
+    } finally { for (const [x, d, m, i] of saved) { if (x.poi) x.poi.isDiscovered = d; x.maps = m; x.selectedMapIndex = i; } ar.canExcavate = can; }
+    if (!res.ok) { has(res.reason, "dig site"); return; }
+    eq(res.setup, true, "setup flag"); ok(res.entries.length === 1, "one hop at a time");
+    const e = res.entries[0]; ok(e.actionId === "cartography:survey" || e.what === "travel", `unexpected step ${e.label}`); ok(e.hexQ !== undefined, "no hex");
+    ok(site, "no site");
+  });
+  test(SR, "a found dig site with a map gets the map and tools picked", () => sandbox(async () => {
+    const ar = game.archaeology, site = list(ar.actions).find((x) => x.maps?.some((m) => m.charges > 0));
+    if (!site) skip("no dig site with a map");
+    const i = site.selectedMapIndex, tools = [...(site.selectedTools ?? [])];
+    try {
+      ar.deselectMap?.(site); for (const t of tools) try { ar.setToolAsInactive(site, t); } catch (e) { /* ignore */ }
+      Q().items = []; add([{ kind: "train", skillId: ar.id, targetLevel: ar.level + 1, targetXp: S().skills.xpAt(ar.level + 1), qty: S().skills.xpAt(ar.level + 1), label: "dig test" }]);
+      A().runner.start(); await sleep(800); A().runner.stop();
+      ok(site.selectedMap, "no map picked"); ok(site.selectedTools?.length, "no tools picked");
+    } finally { if (i >= 0 && site.selectedMapIndex !== i) try { ar.setMapAsActive(site, i); } catch (e) { /* ignore */ } }
+  }));
+  test(SR, "Rags to Riches II and III train Magic and count as a way to get gems", () => {
+    const mg = skill("Magic"), names = S().skills.methodsOf(mg).map((m) => m.name);
+    ok(names.some((n) => /Rags to Riches II$/.test(n)), "no Rags to Riches II"); ok(names.some((n) => /Rags to Riches III$/.test(n)), "no Rags to Riches III");
+    ok(T()._dev.farmSkills(item("melvorD:Topaz")).some((o) => /Rags to Riches/.test(o.a.name)), "not a gem source");
   });
 
   // =================================================================================================================
