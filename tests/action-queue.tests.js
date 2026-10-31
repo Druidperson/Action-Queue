@@ -36,8 +36,9 @@
   const SETTINGS = ["autoStart", "autoSell", "autoBuy", "sideJobs"];
 
   // ---- sandbox: everything a test changes is put back afterwards ----
-  const swalOpen = () => { try { return !!SwalLocale.isVisible(); } catch (e) { return !!document.querySelector(".swal2-container .swal2-popup"); } };
-  const closeSwal = async () => { for (let i = 0; i < 5 && swalOpen(); i++) { try { SwalLocale.close(); } catch (e) { /* ignore */ } await sleep(300); } await waitFor(() => !document.querySelector(".swal2-container"), 3000, 100); };
+  // a popup counts while it's showing, not while it plays its closing animation (which can stall if the tab was hidden)
+  const swalOpen = () => { try { return !!SwalLocale.isVisible() && !SwalLocale.getPopup()?.classList.contains("swal2-hide"); } catch (e) { return !!document.querySelector(".swal2-container .swal2-popup:not(.swal2-hide)"); } };
+  const closeSwal = async () => { for (let i = 0; i < 5 && swalOpen(); i++) { try { SwalLocale.close(); } catch (e) { /* ignore */ } await sleep(300); } await waitFor(() => !document.querySelector(".swal2-container .swal2-popup:not(.swal2-hide)"), 3000, 100); };
   const openTrain = async () => { await closeSwal(); S().openTrain(); ok(await waitFor(() => $("mst-tr-skill") && /Train a skill/.test(swalTitle()), 4000, 100), "the Train window didn't open"); await sleep(600); /* its fields are wired up once the opening animation ends */ };
   const swalTitle = () => { if (!swalOpen()) return ""; try { return SwalLocale.getTitle()?.textContent ?? ""; } catch (e) { return document.querySelector(".swal2-title")?.textContent ?? ""; } };
   const $ = (id) => { try { return SwalLocale.getPopup()?.querySelector("#" + id) ?? null; } catch (e) { return document.getElementById(id); } };
