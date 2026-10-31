@@ -26,7 +26,7 @@ Make 500 Bronze Bars and the queue mines the ore, smelts it and stops at 500. If
 
 Aim for a level and it works out the best method for each stretch of the climb. It counts everything a method takes, materials included, so you never end up farming ore for hours to earn a few points of XP. It only switches methods when a clearly better one opens up. If a better method is held back by another skill, like iron bars needing Mining, it checks whether training that skill first gets you there sooner.
 
-Some recipes need things the queue can't gather or craft. Feathers, compost and shards come from the shop. Herbs and monster drops show up as a step for you to do yourself, and the queue waits there until you have them.
+Some recipes need things the queue can't gather or craft directly. Feathers, compost and shards come from the shop. Herbs get grown in Farming. Seeds, gems and other drops come from whatever drops them fastest: a skill, a safe fight, a Thieving target that's safe for you, or something you open like a Bird Nest or a Herb Sack. Ash and Charcoal come from burning logs, and Perfect dishes from cooking. If the queue still can't get something, it shows up as a step for you to do yourself, and the queue waits there until you have it.
 
 Cooking burns food, so the queue gathers extra raw food to cover it. If a craft runs short anyway, it goes back, gathers what's missing and carries on.
 
@@ -37,11 +37,11 @@ Woodcutting, Mining, Fishing, Cooking, Smithing, Fletching, Crafting, Runecrafti
 - Firemaking, Thieving and Astrology don't make anything you'd ask for, so they only take level goals. Firemaking cuts the logs it needs first.
 - Thieving only runs when it's safe while you're away: food equipped and auto eat set above the target's biggest hit. If your food runs out, the queue stops.
 - Summoning shards come from the shop. It uses the ones in your bank first.
-- Magic trains with Alt Magic, using your runes. Superheat turns ores into bars, and Just Learning and Item Alchemy are cast on something the queue can gather or make, like arrowtips or bars. Alchemy goes for the item that makes the most GP. Your other bank items are never used.
+- Magic trains with Alt Magic, using your runes. Superheat turns ores into bars, and Just Learning and Item Alchemy are cast on something the queue can gather or make, like arrowtips or bars. Alchemy goes for the item that makes the most GP. Rags to Riches II and III only need runes, so they train Magic too and count as a way to get gems. Your other bank items are never used.
 - Harvesting shows up once the Abyssal realm is unlocked.
-- Farming plants on your unlocked plots with seeds you own, waits for the crops and harvests them. Compost you own goes on first, and a Farming goal offers to buy some. While crops grow, the queue works on other steps.
+- Farming plants on your unlocked plots with seeds you own, waits for the crops and harvests them. Compost you own goes on first, and a Farming goal offers to buy some. While crops grow, the queue works on other steps. If a crop needs a kind of plot you haven't unlocked yet, like a Herb plot, the queue asks you before unlocking one with GP.
 - Cartography makes paper from logs, or surveys the map around where you stand.
-- Archaeology digs at sites where you have a map with charges. With no map, the goal offers to make one first and picks your tools.
+- Archaeology digs at sites where you have a map with charges, and picks the map and your tools. With no map, the goal offers to make one first. If you haven't found a dig site yet, the goal finds one: it surveys in Cartography one hex at a time toward the closest site, travels onto it (asking first when a trip costs GP) and that discovers it.
 
 ## Agility course builder
 

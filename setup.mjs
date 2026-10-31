@@ -5,7 +5,7 @@
 //   3. Township tasks: the green play buttons on Township tasks, which plan a task and add its steps
 // The parts talk through `parts` below. Other mods still reach the queue as mod.api.actionQueue (or window.actionQueue).
 export function setup(ctx) {
-  const VERSION = "2.1.0";
+  const VERSION = "2.2.0";
   const parts = { aq: null, st: null, installed: false };
 
   // ======================================================================================================================

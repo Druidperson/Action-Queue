@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.2.0
+- Herbs work now. A potion that needs a herb grows it in Farming, and if you have no Herb plot yet, the queue asks before unlocking one with GP. Herblore can be trained from scratch this way. It's slow early on since herb seeds mostly drop from monsters.
+- The queue looks in more places for things it can't gather or make. Thieving targets count when they're safe for you, so their seeds and herbs can be farmed. So can things you open: the queue gets the Bird Nests, Herb Sacks or Stacks of Bones first, then opens them for you.
+- Ash and Charcoal come from burning logs, and Perfect dishes (for Summoning) from cooking. Those steps get more logs or raw food when they run out.
+- Archaeology finds its own dig site. If you haven't found one yet, an Archaeology goal surveys in Cartography toward the closest site one hex at a time and travels onto it, which discovers it. Trips that cost GP ask first. It also picks the map you got for finding the site, then your tools, instead of stopping with "needs a map".
+- Rags to Riches II and III train Magic, and count as a way to get gems.
+- Level goals count drop times when they plan, so a goal that needs seeds from monsters isn't stuck saying it can't get them.
+
 ## 2.1.0
 - Monster tasks that aren't safe while you're away (Mumma Chicken, say, when it hits harder than where your auto eat starts) aren't flat out refused anymore. The task window says why, and you can tick "I'll stay and eat myself during this fight" to add it anyway. Add to queue stays off until you tick it. The queue then runs that fight without waiting for auto eat and gives you a heads up when it starts. If you don't eat in time you can die and lose an item, so only tick it if you'll be there.
 - A monster that can kill you in one hit from full HP, or having no food equipped, still can't be added.
