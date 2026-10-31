@@ -314,8 +314,10 @@ export function setup(ctx) {
             const xpNow = Math.floor(sk.xp ?? 0);
             cur.stall = cur.lastXp !== undefined && xpNow <= cur.lastXp ? (cur.stall ?? 0) + 1 : 0;
             cur.lastXp = xpNow;
-            if (cur.stall >= 2) return this.block(cur, "training isn't giving any XP, so the plan stopped. Check the steps above it");
             const nb = T.plan(cur);
+            // steps that make training possible (finding a dig site) give no XP of their own
+            if (nb.ok && nb.setup) cur.stall = 0;
+            if (cur.stall >= 2) return this.block(cur, "training isn't giving any XP, so the plan stopped. Check the steps above it");
             if (!nb.ok) return this.block(cur, nb.reason);
             cur.now = nb.note; if (nb.to !== undefined) cur.afterLevel = nb.to;
             Queue.insertBefore(cur.id, nb.entries);
@@ -352,6 +354,8 @@ export function setup(ctx) {
             return this.setState("paused", `Your turn: ${A.turn(cur, t)}`);
           }
           if (cur.kind !== "manual" && !T) return this.block(cur, NO_TRAINER);
+          // the trainer can say a step has done its job (a hex is surveyed) whatever its count says
+          if (cur.kind !== "manual" && T.done?.(cur)) { this.finish(cur); continue; }
 
           // a different entry is now on top (we just started, or something was added above): switch to it
           if (this.activeId !== cur.id) {
@@ -869,6 +873,51 @@ export function setup(ctx) {
       const found = sites.filter((x) => x.poi?.isDiscovered).sort((a, b) => xpRate(methodById(ar, b.id)) - xpRate(methodById(ar, a.id)));
       return { site: found[0] ?? null, hidden: sites.length > 0 && !found.length };
     };
+    // ---------- finding a dig site ----------
+    // A dig site has to be found on the Cartography map before a map can be made for it. You can only survey the hexes
+    // next to where you stand, so the queue works toward the site one hex at a time: survey the next hex on the way,
+    // travel onto it, and so on, then survey the site's own hex and travel onto it, which discovers it. Travelling can
+    // cost GP, and the queue asks you first when it does.
+    const CARTO = "melvorAoD:Cartography";
+    const cmap = () => game.cartography?.activeMap;
+    const atHex = (h) => { const p = cmap()?.playerPosition; return !!p && !!h && p.q === h.q && p.r === h.r; };
+    const hexDist = (a, b) => { const dq = a.q - b.q, dr = a.r - b.r; return (Math.abs(dq) + Math.abs(dr) + Math.abs(dq + dr)) / 2; };
+    const canStep = (h) => !h.isWater && (h.cartographyLevel ?? 1) <= game.cartography.level && game.checkRequirements(h.requirements ?? []);
+    const hexOf = (e) => { try { return cmap().getHex({ q: e.hexQ, r: e.hexR }) ?? null; } catch (err) { return null; } };
+    // the dig site to look for: open at your level and not found yet, lowest level first, then the closest
+    const hiddenSite = () => {
+      const ar = game.archaeology, p = cmap()?.playerPosition;
+      if (!p) return null;
+      return list(ar?.actions).filter((x) => realmOk(x) && lvl(x) <= ar.level && x.poi?.hex && !x.poi.isDiscovered).sort((a, b) => lvl(a) - lvl(b) || hexDist(a.poi.hex, p) - hexDist(b.poi.hex, p))[0] ?? null;
+    };
+    // the next thing to do on the way: { hop: "survey" | "travel", hex }, or { why } when there's no way
+    const digRoute = (site) => {
+      const map = cmap(), t = site?.poi?.hex;
+      if (!map || !t) return { why: "the Cartography map isn't available" };
+      if (t.isFullySurveyed) return { hop: "travel", hex: t };
+      const d0 = hexDist(map.playerPosition, t);
+      if (d0 <= map.surveyRange) return canStep(t) ? { hop: "survey", hex: t } : { why: `the hex ${nm(site)} is on needs Cartography level ${t.cartographyLevel}` };
+      const next = map.getHexesInRange(map.playerPosition, map.surveyRange).filter((h) => !atHex(h) && canStep(h) && hexDist(h, t) < d0)
+        .sort((a, b) => hexDist(a, t) - hexDist(b, t) || b.isFullySurveyed - a.isFullySurveyed)[0];
+      if (!next) return { why: `there's no way toward ${nm(site)} from where you are on the map` };
+      return { hop: next.isFullySurveyed ? "travel" : "survey", hex: next };
+    };
+    const routeStep = (site, parent) => {
+      const r = digRoute(site);
+      if (!r.hop) return r;
+      const h = r.hex, onSite = h === site.poi.hex, base = { skillId: CARTO, hexQ: h.q, hexR: h.r, parent, site: site.id };
+      return { entry: r.hop === "survey"
+        ? { ...base, kind: "skill", actionId: "cartography:survey", qty: 1e12, label: onSite ? `Cartography: survey ${nm(site)}` : `Cartography: survey a hex on the way to ${nm(site)}` }
+        : { ...base, kind: "ask", what: "travel", qty: 1, label: onSite ? `Cartography: travel to ${nm(site)}` : `Cartography: travel toward ${nm(site)}` } };
+    };
+    // what a trip costs (null when the game finds no path)
+    const travelCost = (h) => {
+      const map = cmap();
+      try { map.selectHex(h); const path = map.selectedHexPath; return path?.length ? costsOf(game.cartography.getTravelCosts(path)) : null; } catch (e) { return null; } finally { try { map.deselectHex(); } catch (e) { /* ignore */ } }
+    };
+    // the game pops a window when a hex with a dig site is surveyed; the queue travels there itself, so it closes it
+    const closePoiPop = () => { try { if (SwalLocale.isVisible() && /Point of Interest/i.test(SwalLocale.getTitle()?.textContent ?? "")) SwalLocale.close(); } catch (e) { /* ignore */ } };
+
     // Agility runs the course you've built; a lap gives the XP of every obstacle. The course builder below fills empty slots.
     const AGILITY = "melvorD:Agility";
     const agilityMethods = (s) => {
@@ -918,7 +967,11 @@ export function setup(ctx) {
       get xp() { const h = surveyHex(s); return h ? Number(s.getSkillXPForHexSurveyAction?.(h)) || (h.cartographyLevel ?? 1) * 2.6 : 0; },
       get ms() { return s.surveyInterval ?? 5000; },
       need: () => (surveyHex(s) ? null : "there's nothing left to survey in range of where you are on the map. Move somewhere new first"),
-      start: () => { const h = surveyHex(s); if (!h) return fail("nothing left to survey nearby"); s.autoSurveyOnClick(h); },
+      // a step with a hex (on the way to a dig site) surveys that one, otherwise it surveys around where you stand
+      start: (e) => {
+        if (e?.hexQ !== undefined) { const h = hexOf(e); if (!h) return fail("that hex wasn't found on the map"); if (!s.isHexInQueue?.(h)) s.surveyOnClick(h); return; }
+        const h = surveyHex(s); if (!h) return fail("nothing left to survey nearby"); s.autoSurveyOnClick(h);
+      },
     })];
     const WHOLE = { [MAGIC]: (s) => magicMethods(s), "melvorD:Agility": agilityMethods, "melvorAoD:Cartography": cartographyMethods };
 
@@ -1228,6 +1281,26 @@ export function setup(ctx) {
     // waits for you to equip the right weapon).
     const popHtml = (o, rows, foot) => step(`<div class="aq-title">${icon(o)}<b>${esc(nm(o))}</b></div>${rows}`) + note(foot);
     const ASKS = {
+      travel: {
+        icon: () => skillById(CARTO),
+        target: (e) => hexOf(e),
+        done: (e, h) => (atHex(h) ? "You're there" : null),
+        cannot: (e, h) => { const c = travelCost(h); return !c ? "the game can't find a way there on the map" : c.c.checkIfOwned() ? null : `you can't pay for the trip right now (${costText(c)})`; },
+        // a free trip just happens; one that costs something asks you first
+        auto: (e) => { const c = travelCost(hexOf(e)); return !!c && !c.cur.length && !c.items.length; },
+        act: (e, h) => {
+          const s = game.cartography, map = cmap(), cost = travelCost(h);
+          if (game.activeAction === s) s.stop();
+          map.selectHex(h); s.travelOnClick(); closePoiPop();
+          return atHex(h) ? `Travelled${cost && (cost.cur.length || cost.items.length) ? ` for ${costText(cost)}` : ""}` : "On the way";
+        },
+        turn: (e) => `confirm the trip on the Cartography map, or skip it.`,
+        pop: (e, h) => {
+          const site = list(game.archaeology?.actions).find((x) => x.id === e.site), onSite = site && site.poi?.hex === h, c = travelCost(h);
+          return { title: "Travel on the map?", yes: "Travel", html: popHtml(skillById(CARTO), chips(chip(onSite ? `To ${esc(nm(site))}` : `One hex closer to ${site ? esc(nm(site)) : "the dig site"}`)) +
+            chips(chip("<b>Costs</b>", "lbl"), chip(esc(c ? costText(c) : "unknown"))), onSite ? "Arriving there discovers the dig site, so the queue can make a map for it." : "The queue can only survey next to where you stand, so it moves one hex at a time.") };
+        },
+      },
       plot: {
         icon: () => skillById(FARMING),
         target: (e) => list(game.farming?.plots).find((x) => x.id === e.actionId),
@@ -1501,7 +1574,11 @@ export function setup(ctx) {
         for (const s of list(skill.actions)) pickTools(s);
         if (!e.noMap && !list(skill.actions).some((s) => lvl(s) <= skill.level && skill.canExcavate?.(s))) {
           const { site, hidden } = mapSite();
-          if (!site && hidden) return fail("you haven't found a dig site you can map yet. Survey the map in Cartography to find one");
+          if (!site && hidden) {
+            const hs = hiddenSite(), r = hs && routeStep(hs, e.id);
+            if (r?.entry) return { ok: true, setup: true, entries: [r.entry], note: `looking for ${nm(hs)} on the map` };
+            return fail(`you haven't found a dig site you can map yet${r?.why ? `: ${r.why}` : ". Survey the map in Cartography to find one"}`);
+          }
           if (site) {
             const mats = materialSteps(costsOf(game.cartography.getMapCreationCosts(site)).items, 1, e.id);
             if (!mats) return fail(`a map for ${nm(site)} needs something the queue can't get on its own`);
@@ -1578,7 +1655,12 @@ export function setup(ctx) {
         return i >= 0 ? `Your equipment set ${i + 1} has a ${w} weapon. This goal switches to it first and back when it's done.` : `You don't have a ${w} weapon on. When this goal starts it waits for you to equip one.`;
       }
       if (sk.id === SLAYER && !hasTask()) { const t = slayerTier(); if (t) return `You have no Slayer task. This goal asks you before rolling ${aOr(nm(t.c))} task (${t.safe.length} of its ${t.mons.length} monsters are safe for you).`; }
-      if (sk.id === ARCH && !list(sk.actions).some((s) => lvl(s) <= sk.level && sk.canExcavate?.(s))) { const { site } = mapSite(); if (site) return `You have no map to dig with. This goal makes a map for ${nm(site)} first, once you confirm it.`; }
+      if (sk.id === ARCH && !list(sk.actions).some((s) => lvl(s) <= sk.level && sk.canExcavate?.(s))) {
+        const { site, hidden } = mapSite();
+        if (site) return `You have no map to dig with. This goal makes a map for ${nm(site)} first, once you confirm it.`;
+        const hs = hidden && hiddenSite();
+        if (hs && routeStep(hs).entry) return `You haven't found a dig site yet. This goal surveys its way to ${nm(hs)} in Cartography first, asking before any trip that costs GP, then makes a map.`;
+      }
       return null;
     };
 
@@ -1605,6 +1687,8 @@ export function setup(ctx) {
       restock: (e) => restockCraft(e),
       plan: (e) => nextBatch(e),
       trainFinished: (e) => restoreSet(e),
+      // a survey step on the way to a dig site is done once its hex is
+      done: (e) => { if (e.actionId !== "cartography:survey" || e.hexQ === undefined) return false; const h = hexOf(e); if (h && !h.isFullySurveyed) return false; closePoiPop(); return true; },
       halt: () => restoreCombat(),
       changed: () => secMemo.m.clear(),
       // ms per unit (item, XP or kill), or the whole time for a goal
@@ -1765,7 +1849,7 @@ export function setup(ctx) {
       // other mods can say where an item comes from (monster drops, gems): fn(item, qty) returns a step, or nothing
       addSource: (fn) => { if (typeof fn === "function") SOURCES.push(fn); },
       openTrain: () => openTrain(),
-      _dev: { Trainer, secMemo, startAction, restockCraft },
+      _dev: { Trainer, secMemo, startAction, restockCraft, hiddenSite, digRoute, routeStep },
     };
     window.skillTrainer = API;
     parts.st = API;
