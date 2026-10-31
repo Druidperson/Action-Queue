@@ -607,7 +607,7 @@
   });
   test(SR, "things you open are planned (get them, then open them)", () => {
     const D = T()._dev;
-    const it = list(game.items).find((x) => { if (S().items.crafter(x.id) || S().items.gatherer(x.id) || D.isFarmItem(x)) return false; const e = D.dropEntry(x, 1); return e?.what === "open"; });
+    const it = list(game.items).find((x) => { if (S().items.crafter(x.id) || S().items.gatherer(x.id) || S().items.shopOnly(x)) return false; const e = D.dropEntry(x, 1); return e?.what === "open"; });
     if (!it) skip("nothing here comes only from something you can open");
     const e = D.dropEntry(it, 1);
     ok(e.before?.length, "no steps to get the container"); ok(e.openId && e.openN > 0, "no open step");
