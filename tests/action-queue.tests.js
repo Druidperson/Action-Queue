@@ -500,22 +500,22 @@
     const html = T()._dev.selfEatSection(m);
     ok(!/data-mbd-selfeat/.test(html), "there shouldn't be a box"); has(text(html), "can't run this fight");
   });
-  test(CB, "a fight you said you'd eat yourself for gets past the auto eat check", () => sandbox(async () => {
-    liveOk();
+  test(CB, "a fight you said you'd eat yourself for gets past the auto eat check", () => {
+    // checked without fighting: these monsters hit harder than your auto eat, so a real fight here isn't something to test with
     const m = eatYourselfMonster(); if (!m) skip("every fight is either safe for you or too dangerous");
-    add([{ kind: "kill", monsterId: m.id, skillId: "melvorD:Hitpoints", actionId: S().fightId(m), qty: 1, label: `Defeat ${m.name} (you eat yourself)`, selfEat: true }]);
-    A().runner.start(); await sleep(2500);
-    ok(items()[0].status !== "blocked", `blocked: ${items()[0].reason}`); eq(game.activeAction, game.combat, "not fighting");
-    A().runner.stop(); await sleep(200);
-    // the same fight without the choice is still refused
-    Q().items = []; Q().save();
-    add([{ kind: "kill", monsterId: m.id, skillId: "melvorD:Hitpoints", actionId: S().fightId(m), qty: 1, label: `Defeat ${m.name}` }]);
-    A().runner.start(); await sleep(500);
-    if (!T()._dev.queueSafety(m).ok) { eq(items()[0].status, "blocked"); has(items()[0].reason, "not safe"); }
-  }), { live: true });
+    const Tr = S()._dev.Trainer, base = { kind: "kill", monsterId: m.id, skillId: "melvorD:Hitpoints", actionId: S().fightId(m), qty: 1 };
+    eq(Tr.check({ ...base, selfEat: true })?.why ?? null, null, "with the box ticked it should pass:");
+    has(Tr.check(base)?.why ?? "", "not safe", "without the box:");
+  });
   test(CB, "a dungeon boss runs the whole dungeon instead of stopping", () => sandbox(async () => {
     liveOk();
-    const dg = list(game.dungeons).find((d) => { const b = d.monsters?.[d.monsters.length - 1]; return b && S().fightId(b)?.includes(`:${d.id}:`) && T()._dev.queueSafety(b, true).ok && !T()._dev.areaMissing(b).length; });
+    // the easiest dungeon you can run, and only one that can't take half your HP in a hit (it runs for a few seconds for real)
+    const hp = game.combat.player.stats.maxHitpoints;
+    const dg = list(game.dungeons).map((d) => ({ d, b: d.monsters?.[d.monsters.length - 1] }))
+      .filter((x) => x.b && S().fightId(x.b)?.includes(`:${x.d.id}:`) && T()._dev.queueSafety(x.b, true).ok && !T()._dev.areaMissing(x.b).length)
+      .map((x) => ({ ...x, max: Math.max(...[...new Set(x.d.monsters)].map((y) => T()._dev.fightSafety(y).max ?? Infinity)) }))
+      .filter((x) => x.max * 2 < hp).sort((a, b) => a.max - b.max)[0]?.d;
+    if (game.combat.player.hitpoints < hp * 0.9) skip("your HP isn't full");
     if (!dg) skip("no dungeon you can run");
     const boss = dg.monsters[dg.monsters.length - 1];
     add([{ kind: "kill", monsterId: boss.id, skillId: "melvorD:Hitpoints", actionId: S().fightId(boss), qty: 1, label: `Defeat ${boss.name} (you eat yourself)`, selfEat: true }]);
