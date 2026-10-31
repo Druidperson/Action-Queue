@@ -752,6 +752,10 @@ export function setup(ctx) {
         const t = sp.specialCost?.type, fixed = sp.fixedItemCosts ?? [], base = { qty: sp.productionRatio ?? 1, ms: skill.baseInterval ?? 2000, succ: 1 };
         if (t === -5 && sp.produces && typeof sp.produces === "object")
           return [method(skill, sp, { ...base, product: sp.produces, get options() { return [{ costs: [...runes(sp), ...fixed], mult: 1 }]; }, start: cast(sp) })];
+        // Rags to Riches II and III only take runes and give a random gem, so they train Magic like any rune-only spell
+        // (the Township part also counts them as a way to get gems)
+        if (t === -5 && (sp.produces === -3 || sp.produces === -4))
+          return [method(skill, sp, { ...base, product: null, own: true, get options() { return [{ costs: [...runes(sp), ...fixed], mult: 1 }]; }, start: cast(sp) })];
         // spells that use up an item you pick (Just Learning, Item Alchemy): cast them on whatever the queue can get the
         // quickest, so the item counts as part of the work. Alchemy turns it into GP as well.
         if (t === -1) return [method(skill, sp, {
@@ -1937,6 +1941,10 @@ export function setup(ctx) {
         for (const it of a.primaryProducts) if (it?.id) out.push({ id: it.id, pct: () => { try { const r = skill.getPrimaryProductInfo(it, a); return Number(r.chance) * Math.max(1, Number(r.quantity) || 1); } catch (e) { return 0; } } });
       } else if (skill.id === "melvorD:Cooking" && a.perfectItem?.id) {
         out.push({ id: a.perfectItem.id, pct: () => { try { return Number(skill.getRecipePerfectChance(a)) * succ(skill, a); } catch (e) { return 0; } } });
+      } else if (skill.id === "melvorD:Magic" && a.specialCost?.type === -5 && (a.produces === -3 || a.produces === -4)) {
+        const tbl = a.produces === -3 ? game.randomGemTable : game.randomSuperiorGemTable;
+        const tw = tbl?.totalWeight || (tbl?.drops ?? []).reduce((t, d) => t + d.weight, 0);
+        for (const d of tbl?.drops ?? []) if (d?.item && tw > 0) out.push({ id: d.item.id, pct: () => 100 * (d.weight / tw) * (a.productionRatio ?? 1) });
       } else if (skill.id === "melvorD:Mining" && a.giveGems && game.randomGemTable?.drops) {
         const tw = game.randomGemTable.totalWeight || game.randomGemTable.drops.reduce((t, d) => t + d.weight, 0);
         for (const d of game.randomGemTable.drops) if (d?.item) out.push({ id: d.item.id, pct: () => (1 + Number(mods().miningGemChance ?? 0)) * (1 + Number(mods().offItemChance ?? 0) / 100) * (d.weight / tw) });
