@@ -33,7 +33,7 @@
   const T = () => window.townshipHelper;
   const Q = () => A()._dev.Queue;
   const R = () => A()._dev.Runner;
-  const SETTINGS = ["autoStart", "autoSell", "autoBuy", "sideJobs"];
+  const SETTINGS = ["autoStart", "autoSell", "autoBuy", "sideJobs", "autoTokens"];
 
   // ---- sandbox: everything a test changes is put back afterwards ----
   // a popup counts while it's showing, not while it plays its closing animation (which can stall if the tab was hidden)
@@ -621,7 +621,10 @@
     const before = have(nest);
     add([{ kind: "ask", what: "open", openId: nest.id, openN: 2, itemId: nest.dropTable.drops[0].item.id, qty: 1, label: "Open test" }]);
     A().runner.start(); await sleep(500);
-    ok(!swalOpen(), "it asked"); eq(items()[0].status, "done", items()[0].reason ?? R().message); eq(have(nest), before - 2, "nests opened");
+    ok(!swalOpen(), "it asked");
+    // a full bank can't take what's inside: the step stops and says so instead of crashing
+    if (items()[0].status === "blocked") { has(items()[0].reason, "too full"); return; }
+    eq(items()[0].status, "done", items()[0].reason ?? R().message); eq(have(nest), before - 2, "nests opened");
     bankUndo.pop(); // the nests are gone
   }));
   test(SR, "Ash and other byproducts plan as Firemaking, and Perfect dishes as Cooking", () => {
@@ -670,6 +673,108 @@
     const mg = skill("Magic"), names = S().skills.methodsOf(mg).map((m) => m.name);
     ok(names.some((n) => /Rags to Riches II$/.test(n)), "no Rags to Riches II"); ok(names.some((n) => /Rags to Riches III$/.test(n)), "no Rags to Riches III");
     ok(T()._dev.farmSkills(item("melvorD:Topaz")).some((o) => /Rags to Riches/.test(o.a.name)), "not a gem source");
+  });
+
+  // =================================================================================================================
+  const MT = "Mastery tokens";
+  const withToken = async (fn) => {
+    const tok = item("melvorD:Mastery_Token_Woodcutting"), wc = skill("Woodcutting"), realm = tok.realm, pool0 = wc.getMasteryPoolXP(realm);
+    try { await fn({ tok, wc, realm, pool0 }); }
+    finally { const q = have(tok); if (q > 0) game.bank.removeItemQuantity(tok, q, false); const g = wc.getMasteryPoolXP(realm) - pool0; if (g) wc.addMasteryPoolXP(realm, -g); }
+  };
+  test(MT, "tokens are claimed while the queue runs, with one message", () => sandbox(() => withToken(async ({ tok, wc, realm, pool0 }) => {
+    liveOk();
+    if (have(tok)) skip("you already have Woodcutting tokens");
+    A().settings.set("autoTokens", true); A()._dev.Tokens.told = 0;
+    const notes = [], on = window.notifyPlayer; window.notifyPlayer = (s, m) => notes.push(m);
+    try {
+      game.bank.addItem(tok, 2, false, false, true);
+      add([logStep(500)]); A().runner.start(); await waitFor(() => !have(tok), 4000);
+    } finally { window.notifyPlayer = on; }
+    eq(have(tok), 0, "tokens left"); ok(wc.getMasteryPoolXP(realm) > pool0, "pool didn't grow");
+    eq(notes.filter((m) => /mastery token/.test(m)).length, 1, "messages");
+  })), { live: true });
+  test(MT, "with the setting off, tokens stay in the bank", () => sandbox(() => withToken(async ({ tok }) => {
+    liveOk();
+    A().settings.set("autoTokens", false);
+    game.bank.addItem(tok, 1, false, false, true); const n = have(tok);
+    add([logStep(500)]); A().runner.start(); await sleep(2500);
+    eq(have(tok), n);
+  })), { live: true });
+  test(MT, "tokens past a full pool stay in the bank", () => sandbox(() => withToken(async ({ tok, wc }) => {
+    const proto = Object.getPrototypeOf(wc), cap = Object.getOwnPropertyDescriptor(wc, "getMasteryPoolCap");
+    A().settings.set("autoTokens", true);
+    try {
+      wc.getMasteryPoolCap = (r) => wc.getMasteryPoolXP(r) + Math.floor(wc.getBaseMasteryPoolCap(r) * (tok.percent / 100)) * 1.5; // room for one
+      game.bank.addItem(tok, 3, false, false, true); const n = have(tok);
+      A()._dev.claimTokens();
+      eq(have(tok), n - 1, "should claim exactly one");
+    } finally { if (cap) Object.defineProperty(wc, "getMasteryPoolCap", cap); else delete wc.getMasteryPoolCap; void proto; }
+  })));
+
+  // =================================================================================================================
+  const RC = "Recipes";
+  test(RC, "every potion tier comes from its recipe", () => {
+    const hl = game.herblore, bad = [];
+    for (const r of list(hl.actions).filter((x) => !x.realm || x.realm.id === "melvorD:Melvor")) for (const p of r.potions ?? []) { const c = S().items.index().crafters.get(p.id)?.[0]; if (c?.a?.id !== r.id) bad.push(p.name); }
+    eq(bad.slice(0, 8).join(", "), "", "potions without their recipe:");
+  });
+  test(RC, "a higher tier potion asks for the mastery it needs", () => {
+    const hl = game.herblore, r = list(hl.actions).find((x) => hl.getPotionTier(x) < 3 && (!x.realm || x.realm.id === "melvorD:Melvor"));
+    if (!r) skip("every recipe is at tier IV");
+    const t = hl.getPotionTier(r) + 1, p = r.potions[t], miss = S().plan.itemMissing(p, 1, true).map((x) => x.text).join("; ");
+    has(miss, `${r.name} mastery`, "missing:");
+    if (r.level > hl.level) return; // the level check answers first when starting it
+    const res = S()._dev.startAction({ kind: "craft", skillId: hl.id, actionId: r.id, itemId: p.id, qty: 1 });
+    eq(res.ok, false); has(res.reason, "mastery");
+  });
+  test(RC, "the tier your mastery is at has no mastery warning", () => {
+    const hl = game.herblore, r = list(hl.actions)[0], p = r.potions[hl.getPotionTier(r)];
+    eq(S().items.potionGap(p), null);
+  });
+  test(RC, "a lower tier than you brew now says so", () => {
+    const hl = game.herblore, r = list(hl.actions)[0], orig = hl.getPotionTier;
+    try { hl.getPotionTier = () => 2; const g = S().items.potionGap(r.potions[0]); ok(g, "no gap"); has(g.why, "higher tier"); }
+    finally { hl.getPotionTier = orig; }
+  });
+  test(RC, "Divine Potion IV lists everything it needs instead of no source", () => {
+    const p = item("melvorF:Divine_Potion_IV"); if (!p) skip("no Divine Potion IV");
+    const miss = S().plan.itemMissing(p, 1, true).map((x) => `${x.text} for ${x.forName}`).join("; ");
+    if (skill("Herblore").level < 57) has(miss, "57 Herblore");
+    if (game.herblore.getPotionTier(game.herblore.getRecipeForPotion(p)) < 3) has(miss, "mastery 90");
+    ok(!/No source found/.test(T()._dev.itemSection(p, 1)), "the Township window says no source");
+  });
+  test(RC, "a Magic or Farming source you're not high enough for is named", () => {
+    const dust = item("melvorF:Holy_Dust"), mg = skill("Magic");
+    const sp = list(game.altMagic.actions).find((x) => x.produces === dust);
+    if (!sp || sp.level <= mg.level) skip("you can already cast Blessed Offering");
+    const miss = S().plan.itemMissing(dust, 1, true).map((x) => x.text);
+    ok(miss.includes(`${sp.level} Magic`), `got ${miss.join("; ")}`);
+  });
+  test(RC, "items only a spell makes plan through Magic, and Bones still come from monsters", () => {
+    const urn = item("melvorF:Small_Urn_Enchanted"); if (!urn) skip("no Enchanted Urn");
+    const row = T()._dev.buildRows(urn, 1).find((r) => r.item === urn);
+    eq(row?.recipe?.c?.skill?.id, "melvorD:Magic", "urn recipe:");
+    const bones = item("melvorD:Bones"); ok(!T()._dev.buildRows(bones, 1).find((r) => r.item === bones)?.recipe, "Bones became a recipe");
+  });
+  test(RC, "everything a skill makes has a source the queue knows about", () => {
+    const isItem = (v) => v && typeof v === "object" && typeof v.id === "string" && game.items.getObjectByID(v.id) === v;
+    const made = new Map();
+    for (const sk of list(game.skills)) for (const a of list(sk.actions)) {
+      if (a.realm && a.realm.id !== "melvorD:Melvor") continue;
+      for (const k of Object.keys(a)) {
+        if (/cost|consum|require|fuel|oil|log$|input|discovered/i.test(k)) continue;
+        const v = a[k], put = (it) => made.set(it.id, `${sk.localID}.${k}`);
+        if (isItem(v)) put(v); else if (Array.isArray(v)) for (const x of v) { if (isItem(x)) put(x); else if (isItem(x?.item)) put(x.item); } else if (v?.drops) for (const d of v.drops) if (isItem(d?.item)) put(d.item);
+      }
+    }
+    const D = T()._dev, none = [];
+    for (const [id, where] of made) {
+      const it = item(id), row = D.buildRows(it, 1).find((r) => r.item === it);
+      if (row?.recipe || D.isFarmItem(it) || D.isAstroItem?.(it)) continue;
+      if (/No source found/.test(D.itemSection(it, 1))) none.push(`${it.name} (${where})`);
+    }
+    eq(none.slice(0, 10).join("; "), "", `${none.length} with no source:`);
   });
 
   // =================================================================================================================

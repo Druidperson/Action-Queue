@@ -5,7 +5,7 @@
 //   3. Township tasks: the green play buttons on Township tasks, which plan a task and add its steps
 // The parts talk through `parts` below. Other mods still reach the queue as mod.api.actionQueue (or window.actionQueue).
 export function setup(ctx) {
-  const VERSION = "2.2.0";
+  const VERSION = "2.3.0";
   const parts = { aq: null, st: null, installed: false };
 
   // ======================================================================================================================
@@ -45,7 +45,9 @@ export function setup(ctx) {
         "When a step makes more than the task needs (like arrowtips crafted in batches), the extra is sold. It never sells anything you already owned."],
       autoBuy: ["aq-autobuy", false, "Buy from the shop without asking",
         "When on, steps that need feathers, Summoning shards, compost or anything else from the shop buy it right away. When off, the queue asks you before every purchase. Agility obstacles, Slayer tasks and dig site maps always ask."],
-      sideJobs: ["aq-sidejobs", true, "Work on other steps while crops grow",
+      autoTokens: ["aq-autotokens", true, "Claim mastery tokens automatically",
+      "While the queue runs, mastery tokens you get are claimed right away so they don't fill up your bank. Tokens that would go past a full mastery pool stay in your bank until there's room."],
+    sideJobs: ["aq-sidejobs", true, "Work on other steps while crops grow",
         "When on, a Farming step that is waiting for its crops lets a later step run in the meantime (gathering, or training that uses no materials), and goes back to the crops once they're ready."],
     };
     let section = null;
@@ -71,6 +73,32 @@ export function setup(ctx) {
     const MANUAL_NOTE = "The queue can't get this on its own, so it's a step you do yourself";
     const costText = (x) => [...x.cur.map((k) => `${num(k.quantity)} ${nm(k.currency)}`), ...x.items.map((k) => `${num(k.quantity)} ${nm(k.item)}`)].join(" + ") || "free";
     const costsOf = (c) => ({ c, items: c.getItemQuantityArray(), cur: c.getCurrencyQuantityArray() });
+
+    // ---------- mastery tokens ----------
+    // Claimed the same way the game's Claim button does it (never past a full pool), but quietly: the game's own claim pops two
+    // notifications each time, so the queue sums them up in one message at most once a minute instead.
+    const Tokens = { n: 0, skills: new Set(), told: 0 };
+    const isToken = (item) => item?.constructor?.name === "MasteryTokenItem" || (typeof MasteryTokenItem !== "undefined" && item instanceof MasteryTokenItem);
+    const claimTokens = () => {
+      if (!Settings.get("autoTokens")) return;
+      for (const [item, bi] of game.bank.items) {
+        try {
+          if (!isToken(item) || !(bi.quantity > 0) || !item.skill?.hasMastery) continue;
+          const sk = item.skill, realm = item.realm, pct = Number(item.percent) + (Number(game.modifiers?.xpFromMasteryTokens) || 0);
+          const per = Math.floor((sk.getBaseMasteryPoolCap(realm) * pct) / 100);
+          if (!(per > 0)) continue;
+          const n = Math.min(bi.quantity, Math.floor((sk.getMasteryPoolCap(realm) - sk.getMasteryPoolXP(realm)) / per));
+          if (!(n > 0)) continue;
+          sk.addMasteryPoolXP(realm, per * n);
+          game.bank.removeItemQuantity(item, n, true);
+          Tokens.n += n; Tokens.skills.add(nm(sk));
+        } catch (e) { console.warn(TAG, "claiming mastery tokens", e); }
+      }
+      if (Tokens.n && Date.now() - Tokens.told > 60000) {
+        tellPlayer(`Claimed ${plural(Tokens.n, "mastery token")} (${[...Tokens.skills].join(", ")})`);
+        Object.assign(Tokens, { n: 0, skills: new Set(), told: Date.now() });
+      }
+    };
 
     // ---------- the trainer ----------
     // Action Queue runs manual steps and shop purchases itself. Every other step (gathering, crafting, training, fights, Farming)
@@ -591,7 +619,10 @@ export function setup(ctx) {
       clearInterval(window.__aqTimer);
       window.__aqTimer = setInterval(mountButton, 2000); // the game can rebuild the menu; put the button back if it vanishes
       clearInterval(window.__aqRunTimer);
-      window.__aqRunTimer = setInterval(() => { try { Runner.step(); } catch (e) { console.warn(TAG, "runner", e); } }, 1000);
+      window.__aqRunTimer = setInterval(() => {
+        try { Runner.step(); } catch (e) { console.warn(TAG, "runner", e); }
+        try { if (Runner.state === "running") claimTokens(); } catch (e) { console.warn(TAG, "tokens", e); }
+      }, 1000);
       console.log(TAG, "installed", VERSION);
       parts.installed = true;
     };
@@ -612,7 +643,7 @@ export function setup(ctx) {
       addAsk: (what, def) => { if (what && def?.target && what !== "buy" && !(ASKS[what]?.builtIn && !def.builtIn)) ASKS[what] = def; },
       addButton, tell: tellPlayer,
       // for testing
-      _dev: { Queue, Runner, Panel, secMemo },
+      _dev: { Queue, Runner, Panel, secMemo, claimTokens, Tokens },
     };
     try { ctx?.api?.(API); } catch (e) { console.warn(TAG, "could not register the mod API", e); }
     window.actionQueue = API;
@@ -795,7 +826,7 @@ export function setup(ctx) {
     };
     // what is special about each skill's actions; skills not listed use their actions as they are
     const SKILLS = {
-      "melvorD:Herblore": (s, a) => method(s, a, { get product() { return a.product ?? a.potions?.[Math.min(a.potions.length - 1, Math.max(0, s.getPotionTier?.(a) ?? 0))] ?? null; }, get qty() { return a.product ? a.baseQuantity ?? 1 : 1; } }),
+      "melvorD:Herblore": (s, a) => method(s, a, { tiers: a.potions ?? [], get product() { return a.product ?? a.potions?.[Math.min(a.potions.length - 1, Math.max(0, s.getPotionTier?.(a) ?? 0))] ?? null; }, get qty() { return a.product ? a.baseQuantity ?? 1 : 1; } }),
       "melvorD:Firemaking": (s, a) => method(s, a, { product: null, name: nm(a.log ?? a), media: a.log?.media, options: [{ costs: a.log ? [{ item: a.log, quantity: 1 }] : [], mult: 1 }] }),
       "melvorD:Thieving": (s, a) => method(s, a, {
         product: null, options: NO_COSTS, safe: () => hitSafety(a.maxHit, a.realm),
@@ -1156,6 +1187,17 @@ export function setup(ctx) {
     const xpRate = (m) => (m.ms > 0 ? ((m.xp * m.succ) / m.ms) * 3600000 : 0);
     // where each item comes from. Magic only makes what no other skill makes, so bars still come from Smithing.
     let idx = null;
+    // Herblore brews the tier your mastery of the recipe is at (tier II from mastery 20, III from 50, IV from 90). Any
+    // other tier can't be brewed right now; this says why, or null when it can (or the item isn't a potion).
+    const potionGap = (item) => {
+      const hl = game.herblore, r = item && hl?.getRecipeForPotion?.(item);
+      if (!r) return null;
+      const t = r.potions.indexOf(item), now = hl.getPotionTier(r), lv = (typeof Herblore !== "undefined" && Herblore.tierMasteryLevels) || [1, 20, 50, 90];
+      if (t < 0 || t === now) return null;
+      return t > now
+        ? { text: `${nm(r)} mastery ${num(lv[t])}`, why: `needs ${nm(r)} mastery ${num(lv[t])} to brew ${nm(item)} (yours is ${num(hl.getMasteryLevel(r))})` }
+        : { text: `${nm(r)} mastery under ${num(lv[t + 1])}`, why: `your ${nm(r)} mastery brews a higher tier now, so ${nm(item)} can't be brewed any more` };
+    };
     const index = () => {
       if (idx) return idx;
       idx = { crafters: new Map(), gatherers: new Map() };
@@ -1163,6 +1205,8 @@ export function setup(ctx) {
       const skills = list(game.skills).filter(isTrainable), known = (id) => idx.crafters.has(id) || idx.gatherers.has(id);
       for (const m of skills.filter((s) => !EXTRA.has(s.id)).flatMap(methodsOf)) if (m.product) add(m);
       for (const m of skills.filter((s) => EXTRA.has(s.id)).flatMap(methodsOf).filter((m) => m.product && !m.own && !known(m.product.id))) add(m);
+      // every tier of a potion comes from its recipe, not just the tier your mastery is at now
+      for (const m of skills.flatMap(methodsOf)) for (const p of m.tiers ?? []) if (p?.id && !(idx.crafters.get(p.id) ?? []).some((x) => x.a === m)) idx.crafters.set(p.id, [...(idx.crafters.get(p.id) ?? []), { skill: m.skill, a: m }]);
       return idx;
     };
     // an extra source only counts once you can use it (the level, an unlocked plot); until then the item is a step you do yourself
@@ -1210,6 +1254,16 @@ export function setup(ctx) {
       for (const n of buildRows(item, qty, fresh)) {
         const x = n.recipe ? n.recipe.c : gatherBlock(n.item.id);
         if (x && lvl(x.a) > x.skill.level) out.set(`${x.a.level} ${nm(x.skill)}|${nm(n.item)}`, { text: `${x.a.level} ${nm(x.skill)}`, forName: nm(n.item) });
+        const pg = n.recipe && potionGap(n.item);
+        if (pg) out.set(`${pg.text}|${nm(n.item)}`, { text: pg.text, forName: nm(n.item) });
+        // nothing the queue can use makes it, but something locked does (a higher level Thieving target, a Perfect dish)
+        if (!n.recipe && !x && !gatherer(n.item.id) && !shopOnly(n.item) && !SOURCES.some((fn) => { try { return fn(n.item, 1); } catch (e) { return false; } })) {
+          // a Magic or Farming source that opens at a higher level (Holy Dust from Blessed Offering, a herb), closest first
+          const own = [...(index().crafters.get(n.item.id) ?? []), ...(index().gatherers.get(n.item.id) ?? [])].filter((y) => lvl(y.a) > y.skill.level).sort((p, q) => (lvl(p.a) - p.skill.level) - (lvl(q.a) - q.skill.level))[0];
+          let t = own ? `${lvl(own.a)} ${nm(own.skill)}` : null;
+          for (const fn of t ? [] : BLOCKERS) { t = (() => { try { return fn(n.item); } catch (e) { return null; } })(); if (t) break; }
+          if (t) out.set(`${t}|${nm(n.item)}`, { text: t, forName: nm(n.item) });
+        }
       }
       return [...out.values()];
     };
@@ -1240,6 +1294,8 @@ export function setup(ctx) {
     };
     // ways to get an item that other mods know about: fn(item, qty) returns a step (or nothing)
     const SOURCES = [];
+    // other parts can also say why an item can't be had yet (a source that's locked behind a level): fn(item) returns text like "70 Cooking"
+    const BLOCKERS = [];
     // Queue entries: "kind" is what the runner does; qty is how many MORE of the item to end up with
     // (for "manual" entries it is how many you should own).
     const plotAsk = (f, r) => { const p = !openPlots(f, r).length && lockedPlot(f, r); return p ? [{ kind: "ask", what: "plot", skillId: f.id, actionId: p.id, qty: 1, label: `Farming: unlock a ${nm(r.category)} plot` }] : []; };
@@ -1414,6 +1470,8 @@ export function setup(ctx) {
       if (!m) return fail(e.kind === "kill" ? "this monster is in a dungeon or special area, so fight it yourself, then press Start" : "this action wasn't found in your game version");
       if (m.level > skill.level) return fail(`needs ${nm(skill)} level ${m.level}`);
       if (m.need?.()) return fail(m.need());
+      const pg = e.kind === "craft" && potionGap(itemById(e.itemId));
+      if (pg) return fail(pg.why);
       if (safety && !safety.ok) return fail(`not safe while you're away: ${safety.why}`);
       if (safety?.self && game.activeAction !== m.actor) A.tell(`${e.label.replace(/ \(you eat yourself\)$/, "")}: the queue isn't waiting for auto eat in this fight, so keep an eye on your HP and eat.`, skillById(HITPOINTS));
       const chk = m.check?.();
@@ -1462,7 +1520,7 @@ export function setup(ctx) {
       // buying from the shop takes no time (you still confirm each purchase); a drop (seeds from a monster, say) takes its
       // average time per item
       if (!x) { if (buyLeft(item) >= n) return { ms: 0, xp: 0 }; const u = dropMs(item); return u > 0 ? { ms: u * n, xp: 0 } : NO; }
-      if (depth > 10 || seen.has(item.id) || !x || x.a.level > levelIn(x.skill, lv) || x.a.need?.(lv)) return NO;
+      if (depth > 10 || seen.has(item.id) || !x || x.a.level > levelIn(x.skill, lv) || x.a.need?.(lv) || (c && potionGap(item))) return NO;
       if (g) { const acts = n / Math.max(1, g.a.qty); return { ms: acts * g.a.ms, xp: g.skill.id === skillId ? acts * g.a.xp : 0 }; }
       const opt = c.a.options[0], crafts = n / perAttempt(c.a, opt); // attempts, not rounded: ranks methods by their steady rate
       const r = { ms: crafts * c.a.ms, xp: c.skill.id === skillId ? crafts * c.a.succ * c.a.xp : 0 };
@@ -1852,11 +1910,12 @@ export function setup(ctx) {
     const API = {
       version: VERSION, settings: Settings, mastery,
       skills: { list: trainSkills, byId: skillById, isTrainable, methodsOf, methodById, makeables, stepFor, xpRate, levelCap, xpAt, levelIn, COMBAT, WEAPON },
-      items: { crafter, gatherer, shopOnly, buyLeft, index: () => index() },
+      items: { crafter, gatherer, shopOnly, buyLeft, potionGap, index: () => index() },
       plan: { buildRows, rowsFor, toEntries, materialSteps, makeTime, acquire, itemMissing, missingHtml, itemSection, rowsMs, trainCands, trainPlan, bestDetour, blockedWhy, goalFirst, agilityPicks, buildSteps, nextBatch },
       fightId, HITPOINTS,
       // other mods can say where an item comes from (monster drops, gems): fn(item, qty) returns a step, or nothing
       addSource: (fn) => { if (typeof fn === "function") SOURCES.push(fn); },
+      addBlocker: (fn) => { if (typeof fn === "function") BLOCKERS.push(fn); },
       openTrain: () => openTrain(),
       _dev: { Trainer, secMemo, startAction, restockCraft, hiddenSite, digRoute, routeStep },
     };
@@ -1939,6 +1998,7 @@ export function setup(ctx) {
       // These steps use up logs or raw food, and get more when they run out like any crafting step.
       if (skill.id === "melvorD:Firemaking" && Array.isArray(a.primaryProducts)) {
         for (const it of a.primaryProducts) if (it?.id) out.push({ id: it.id, pct: () => { try { const r = skill.getPrimaryProductInfo(it, a); return Number(r.chance) * Math.max(1, Number(r.quantity) || 1); } catch (e) { return 0; } } });
+        for (const it of a.secondaryProducts ?? []) if (it?.id) out.push({ id: it.id, pct: () => { try { const r = skill.getSecondaryProductInfo(it, a); return Number(r.chance) * Math.max(1, Number(r.quantity) || 1); } catch (e) { return 0; } } });
       } else if (skill.id === "melvorD:Cooking" && a.perfectItem?.id) {
         out.push({ id: a.perfectItem.id, pct: () => { try { return Number(skill.getRecipePerfectChance(a)) * succ(skill, a); } catch (e) { return 0; } } });
       } else if (skill.id === "melvorD:Magic" && a.specialCost?.type === -5 && (a.produces === -3 || a.produces === -4)) {
@@ -2012,6 +2072,8 @@ export function setup(ctx) {
         for (const rp of a.randomProducts ?? []) if (rp?.id) push(idx.randoms, rp.id, { skill, a });
         if (skill.id === ASTRO_ID && (!a.realm || a.realm.id === MELVOR_REALM)) for (const ri of a.randomItems ?? []) if (ri?.id) push(idx.randoms, ri.id, { skill, a });
         for (const x of specialDrops(skill, a)) push(idx.randoms, x.id, { skill, a, pct: x.pct });
+        // every tier of a potion comes from its recipe (the tier you brew depends on your mastery)
+        for (const p of a.potions ?? []) if (p?.id && !(idx.crafters.get(p.id) ?? []).some((x) => x.a === a)) push(idx.crafters, p.id, { skill, a });
         // Thieving: a successful pickpocket rolls the target's loot table 75% of the time
         if (skill.id === THIEVING_ID && a.lootTable) {
           const drops = a.lootTable.drops ?? [], tw = Number(a.lootTable.totalWeight) || drops.reduce((t, d) => t + (d.weight || 0), 0);
@@ -2030,6 +2092,22 @@ export function setup(ctx) {
       const drops = m.lootTable?.drops ?? m.lootTable?._drops ?? [];
       if (Array.isArray(drops)) for (const d of drops) if (d?.item) push(idx.droppers, d.item.id, m);
       if (m.bones?.item) push(idx.droppers, m.bones.item.id, m);
+    }
+    // spells that turn runes (and an item) into something, like Holy Invocation making Enchanted Urns. Only for things
+    // nothing else gives, so Bones still come from monsters and not from Bone Offering.
+    const has = (id) => idx.crafters.has(id) || idx.gatherers.has(id) || idx.randoms.has(id) || idx.droppers.has(id);
+    const magic = skillById(MAGIC_ID);
+    for (const sp of list(magic?.actions)) {
+      try {
+        if (sp.specialCost?.type !== -5 || typeof sp.produces !== "object" || !sp.produces?.id || has(sp.produces.id) || (sp.realm && sp.realm.id !== MELVOR_REALM)) continue;
+        if (!Object.prototype.hasOwnProperty.call(sp, "itemCosts")) Object.defineProperties(sp, {
+          itemCosts: { get: () => [...(sp.runesRequired ?? []), ...(sp.fixedItemCosts ?? [])].map((r) => ({ item: r.item, quantity: r.quantity })), configurable: true },
+          product: { get: () => sp.produces, configurable: true },
+          baseQuantity: { get: () => sp.productionRatio ?? 1, configurable: true },
+          baseInterval: { get: () => magic.baseInterval ?? 2000, configurable: true },
+        });
+        push(idx.crafters, sp.produces.id, { skill: magic, a: sp });
+      } catch (e) { /* ignore */ }
     }
     try {
       for (const p of list(game.shop?.purchases)) {
@@ -2388,21 +2466,29 @@ export function setup(ctx) {
     }
     return out;
   };
+  // the level that opens the closest source of an item, when every source is still locked (null otherwise)
+  const lockedSource = (item) => {
+    buildIndex();
+    const id = item.id;
+    if (idx.shop.get(id)) return null;
+    const opts = [...(idx.gatherers.get(id) ?? []), ...(idx.randoms.get(id) ?? [])];
+    if (!opts.length || opts.some((x) => (x.a.level ?? 1) <= x.skill.level)) return null;
+    try { if (idx.droppers.get(id)?.some((m) => areaFor(m) && !areaMissing(m).length)) return null; } catch (e) { /* ignore */ }
+    const best = opts.reduce((m, x) => ((x.a.level ?? 1) - x.skill.level < (m.a.level ?? 1) - m.skill.level ? x : m));
+    return `${best.a.level ?? 1} ${nm(best.skill)}`;
+  };
   const itemMissing = (item, qty, fresh = false) => {
     const out = [];
     for (const n of buildRows(item, qty, fresh)) {
       if (n.recipe) {
         const { c } = n.recipe;
         if ((c.a.level ?? 1) > c.skill.level) out.push({ text: `${c.a.level} ${nm(c.skill)}`, forName: nm(n.item) });
+        const pg = st()?.items.potionGap?.(n.item);
+        if (pg) out.push({ text: pg.text, forName: nm(n.item) });
         continue;
       }
-      const id = n.item.id;
-      if (idx.shop.get(id)) continue;
-      const opts = [...(idx.gatherers.get(id) ?? []), ...(idx.randoms.get(id) ?? [])];
-      if (!opts.length || opts.some((x) => (x.a.level ?? 1) <= x.skill.level)) continue;
-      try { if (idx.droppers.get(id)?.some((m) => areaFor(m) && !areaMissing(m).length)) continue; } catch (e) { /* ignore */ }
-      const best = opts.reduce((m, x) => ((x.a.level ?? 1) - x.skill.level < (m.a.level ?? 1) - m.skill.level ? x : m));
-      out.push({ text: `${best.a.level ?? 1} ${nm(best.skill)}`, forName: nm(n.item) });
+      const t = lockedSource(n.item);
+      if (t) out.push({ text: t, forName: nm(n.item) });
     }
     const seen = new Set();
     return out.filter((x) => { const k = x.text + "|" + x.forName; if (seen.has(k)) return false; seen.add(k); return true; });
@@ -2930,13 +3016,20 @@ export function setup(ctx) {
     };
     // the queue can use what this mod knows about random drops when a recipe step runs short
     st().addSource((item, qty) => dropEntry(item, qty));
+    st().addBlocker?.((item) => lockedSource(item));
     aq().addAsk("open", {
       icon: (e) => itemById(e.openId),
       target: (e) => { const o = itemById(e.openId); return o && { o }; },
       done: () => null,
       auto: () => true,
       cannot: (e, t) => ((have(t.o) ?? 0) > 0 ? null : `you have no ${nm(t.o)} to open`),
-      act: (e, t) => { const n = Math.min(e.openN ?? 1, have(t.o) ?? 0); game.bank.processItemOpen(t.o, n); return `Opened ${num(n)} ${nm(t.o)}`; },
+      // the game throws when nothing fits in the bank, so count what actually got opened
+      act: (e, t) => {
+        const before = have(t.o) ?? 0, n = Math.min(e.openN ?? 1, before);
+        try { game.bank.processItemOpen(t.o, n); } catch (err) { /* nothing fit */ }
+        const opened = before - (have(t.o) ?? 0);
+        return opened > 0 ? `Opened ${num(opened)} ${nm(t.o)}` : { block: `your bank is too full to open ${nm(t.o)}. Make some room, then press Start` };
+      },
       turn: (e, t) => `open ${nm(t.o)}.`,
       hint: () => "opens them for you",
     });
@@ -2951,7 +3044,7 @@ export function setup(ctx) {
       },
       refresh,
       // internals for testing
-      _dev: { selfEatSection, queueSafety, itemMissing, areaMissing, buildRows, toEntries, itemSection, sourceHtml, describeGoal, killEntry, xpEntry, xpSection, dropEntry, farmPlan, farmSkills, farmFights, fightSafety, astroOptions, bestCon, isFarmItem, isAstroItem, fire },
+      _dev: { selfEatSection, queueSafety, lockedSource, itemMissing, areaMissing, buildRows, toEntries, itemSection, sourceHtml, describeGoal, killEntry, xpEntry, xpSection, dropEntry, farmPlan, farmSkills, farmFights, fightSafety, astroOptions, bestCon, isFarmItem, isAstroItem, fire },
     };
     LOG("installed", VERSION);
   };

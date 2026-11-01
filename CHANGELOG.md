@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.3.0
+- New setting, on by default: Claim mastery tokens automatically. While the queue runs, tokens get claimed as they drop so they don't fill up your bank. It stops at a full mastery pool like the game's Claim button does, and the rest wait in your bank. Instead of the game's two pop-ups per claim, you get one message a minute at most.
+- Potions at every tier have a known source now. Things like Divine Potion IV used to say "no source found". Now they plan through their Herblore recipe and tell you what's missing, like Herblore 57 and Divine Potion mastery 90, since the tier you brew comes from your mastery.
+- When something does have a source but you're not high enough for it yet, the Train window and the task windows name the level (56 Magic for Holy Dust, say) instead of leaving it as a step you do yourself with no reason.
+- Items only a spell makes, like Enchanted Urns, plan through Magic. Firemaking's Generous Fire Spirit counts as a Firemaking drop.
+- Fixed: opening Bird Nests or other containers crashed the step when your bank was nearly full. It now stops and says your bank is too full.
+- I checked every item every skill makes. All of them have a source the queue knows about now, except two Cooking curiosities (Abnormal Log and Red Herring) that aren't really made by cooking.
+
 ## 2.2.0
 - Herbs work now. A potion that needs a herb grows it in Farming, and if you have no Herb plot yet, the queue asks before unlocking one with GP. Herblore can be trained from scratch this way. It's slow early on since herb seeds mostly drop from monsters.
 - The queue looks in more places for things it can't gather or make. Thieving targets count when they're safe for you, so their seeds and herbs can be farmed. So can things you open: the queue gets the Bird Nests, Herb Sacks or Stacks of Bones first, then opens them for you.

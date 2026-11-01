@@ -26,7 +26,7 @@ Make 500 Bronze Bars and the queue mines the ore, smelts it and stops at 500. If
 
 Aim for a level and it works out the best method for each stretch of the climb. It counts everything a method takes, materials included, so you never end up farming ore for hours to earn a few points of XP. It only switches methods when a clearly better one opens up. If a better method is held back by another skill, like iron bars needing Mining, it checks whether training that skill first gets you there sooner.
 
-Some recipes need things the queue can't gather or craft directly. Feathers, compost and shards come from the shop. Herbs get grown in Farming. Seeds, gems and other drops come from whatever drops them fastest: a skill, a safe fight, a Thieving target that's safe for you, or something you open like a Bird Nest or a Herb Sack. Ash and Charcoal come from burning logs, and Perfect dishes from cooking. If the queue still can't get something, it shows up as a step for you to do yourself, and the queue waits there until you have it.
+Some recipes need things the queue can't gather or craft directly. Feathers, compost and shards come from the shop. Herbs get grown in Farming. Seeds, gems and other drops come from whatever drops them fastest: a skill, a safe fight, a Thieving target that's safe for you, or something you open like a Bird Nest or a Herb Sack. Ash and Charcoal come from burning logs, and Perfect dishes from cooking. Potions come from their Herblore recipe at every tier, but the tier you brew depends on your mastery of that recipe (tier II from mastery 20, III from 50, IV from 90). If you ask for a tier your mastery can't brew yet, the window tells you the mastery it needs. When a source exists but you're not high enough for it yet, the window names the level instead of saying there's no source. If the queue still can't get something, it shows up as a step for you to do yourself, and the queue waits there until you have it.
 
 Cooking burns food, so the queue gathers extra raw food to cover it. If a craft runs short anyway, it goes back, gathers what's missing and carries on.
 
@@ -94,6 +94,7 @@ Your queue is saved per character, so it's still there after a reload.
 - Auto-sell sells the extras a step makes, never anything you already owned
 - Buy from the shop without asking, for things like feathers, shards and compost
 - Work on other steps while crops grow, then come back for the harvest
+- Claim mastery tokens automatically while the queue runs, so they don't clog your bank. It never claims past a full mastery pool.
 - Prefer mastery XP when training a skill
 - Fights don't need auto eat
 
