@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.5.0
+- Prayer training refills itself. When prayer points run low, the queue picks up the bones the fight dropped (they sit in the loot window until a fight ends) and buries them, then turns the prayer back on. With no points and no bones, it keeps fighting with the prayer off until some bones drop, instead of stopping.
+- A Prayer goal can start with no prayer points and an empty bank, as long as the monster drops bones.
+- The planner counts how much of a fight you can actually pray through: each kill costs about one point per hit and only gives back what its bones are worth. It now picks monsters you kill in few hits and that drop good bones (Chickens early on) instead of assuming you can pray non-stop. Bones in your bank count too.
+
 ## 2.4.0
 - Item upgrades work now. Things like the (G) Adamant Shield from the Normal Township task plan all the way through: the queue mines and smiths the Adamant Shield, makes the Silver and Gold Bars, then upgrades to (S) and then to (G). Each upgrade that costs GP asks you first and shows the full cost. Skip turns it into a step you do yourself.
 - The window shows the GP an upgrade costs, and warns you if you don't have enough yet.

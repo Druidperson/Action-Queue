@@ -5,7 +5,7 @@
 //   3. Township tasks: the green play buttons on Township tasks, which plan a task and add its steps
 // The parts talk through `parts` below. Other mods still reach the queue as mod.api.actionQueue (or window.actionQueue).
 export function setup(ctx) {
-  const VERSION = "2.4.0";
+  const VERSION = "2.5.0";
   const parts = { aq: null, st: null, installed: false };
 
   // ======================================================================================================================
@@ -1041,7 +1041,25 @@ export function setup(ctx) {
     // Prayer points run out: the cheapest bones in your bank (by sale price per point) are buried for more
     const bones = () => perSec("bones", () => list(game.items).filter((it) => it.prayerPoints > 0 && owned(it) > 0 && !game.bank.items.get(it)?.locked)
       .sort((a, b) => (a.sellsFor?.quantity ?? 0) / a.prayerPoints - (b.sellsFor?.quantity ?? 0) / b.prayerPoints)[0] ?? null);
+    // bones a fight drops sit in the loot window until the fight ends, so pick them up first
+    const lootBones = () => {
+      const loot = game.combat?.loot;
+      try { for (let i = (loot?.drops?.length ?? 0) - 1; i >= 0; i--) if (loot.drops[i]?.item?.prayerPoints > 0) loot.lootItem(i); } catch (e) { console.warn(TAG, "looting bones", e); }
+      secMemo.m.delete("bones");
+    };
+    // prayer points the bones in your bank are worth
+    const bonePoints = () => perSec("bonepts", () => list(game.items).reduce((t, it) => t + (it.prayerPoints > 0 && !game.bank.items.get(it)?.locked ? owned(it) * ppBone(it) : 0), 0));
+    const ppBone = (b) => Number(game.bank.getPrayerPointsPerBone?.(b)) || b.prayerPoints || 0;
+    // You can only pray while you have points. A kill costs about (attacks x the prayer's cost) and its bones give some
+    // back, plus whatever is in your bank (spread over 100 kills). That's the share of a fight that earns Prayer XP.
+    const prayerShare = (m, attacks) => {
+      const pr = bestPrayer(), used = attacks * (pr?.pointsPerPlayer ?? 0);
+      if (!(used > 0) || !isFinite(used)) return 0;
+      const back = m.bones?.item ? (m.bones.quantity ?? 1) * ppBone(m.bones.item) : 0;
+      return Math.min(1, (back + bonePoints() / 100) / used);
+    };
     const buryBones = () => {
+      lootBones();
       const b = bones();
       if (!b) return false;
       try { game.bank.buryItemOnClick(b, Math.max(1, Math.ceil(100 / (Number(game.bank.getPrayerPointsPerBone?.(b)) || b.prayerPoints)))); } catch (e) { console.warn(TAG, "burying bones", e); }
@@ -1104,13 +1122,20 @@ export function setup(ctx) {
       if (type === "magic" && !(pl.spellSelection.attack && pl.canUseCombatSpell(pl.spellSelection.attack))) return "needs a combat spell you can cast selected in Combat";
       if (type === "ranged" && !(pl.equipment.equippedItems["melvorD:Quiver"]?.quantity > 0)) return "needs ammo in your quiver";
       if (skill.id === PRAYER && !bestPrayer()) return "needs a prayer you can use";
-      if (skill.id === PRAYER && !(pl.prayerPoints > 0) && !bones()) return "needs prayer points, or bones in your bank to bury";
+      if (skill.id === PRAYER && !(pl.prayerPoints > 0) && !bones() && !m.bones?.item) return `needs prayer points, bones in your bank, or a monster that drops bones (${nm(m)} doesn't)`;
       return null;
     };
     // checked every second while a fight runs: runes, ammo and prayer points can run out
-    const fightCheck = (skill) => {
+    const fightCheck = (skill, m) => {
       const pl = player(), sp = pl.spellSelection.attack;
-      if (skill.id === PRAYER && !(pl.prayerPoints > 0) && !buryBones()) return { why: "out of prayer points, with no bones left to bury" };
+      // Prayer: when points run low, pick up the bones this fight dropped and bury them, then pray again. With none yet,
+      // keep fighting with the prayer off until some drop (only a monster with no bones stops the step).
+      if (skill.id === PRAYER) {
+        const pr = bestPrayer(), cost = Math.max(1, pr?.pointsPerPlayer ?? 1);
+        if (pl.prayerPoints < cost) buryBones();
+        if (pr && pl.prayerPoints >= cost && !pl.activePrayers.has(pr)) try { pl.togglePrayer(pr); } catch (e) { /* not allowed right now */ }
+        if (!(pl.prayerPoints > 0) && !m?.bones?.item && !bones()) return { why: "out of prayer points, with no bones left to bury" };
+      }
       if (pl.attackType === "ranged" && !(pl.equipment.equippedItems["melvorD:Quiver"]?.quantity > 0)) return { why: "out of ammo" };
       if (pl.attackType === "magic" && sp && !pl.getRuneCosts(sp).every((k) => owned(k.item) >= k.quantity)) return { why: "out of runes", noMaterials: true };
       return null;
@@ -1153,9 +1178,10 @@ export function setup(ctx) {
       const run = isRun(area);
       // in a run, every room counts: the hardest hit of any monster in it, and the time to clear it for each kill of this one
       const ev = () => perSec(`${skill.id}|${area.id}|${m.id}`, () => {
-        if (!run) return { ...killStats(m), xp: xpPerKill(skill, m, area), hit: maxTaken(m) };
+        if (!run) { const ks = killStats(m); return { ...ks, xp: xpPerKill(skill, m, area) * (skill.id === PRAYER ? prayerShare(m, ks.attacks) : 1), hit: maxTaken(m) }; }
         const ms = area.monsters, hits = [...new Set(ms)].map(maxTaken), per = ms.filter((x) => x === m).length || 1;
-        return { ...killStats(m), ms: ms.reduce((t, x) => t + killStats(x).ms, 0) / per, xp: xpPerKill(skill, m, area), hit: hits.includes(null) ? null : Math.max(...hits) };
+        const ks = killStats(m);
+        return { ...ks, ms: ms.reduce((t, x) => t + killStats(x).ms, 0) / per, xp: xpPerKill(skill, m, area) * (skill.id === PRAYER ? prayerShare(m, ks.attacks) : 1), hit: hits.includes(null) ? null : Math.max(...hits) };
       });
       return method(skill, m, {
         id: `fight:${area.id}:${m.id}`, name: `Fight ${nm(m)}${game.slayerAreas.allObjects.includes(area) ? ` (${nm(area)})` : ""}`, media: m.media, product: null, level: 1, succ: 1,
@@ -1164,7 +1190,7 @@ export function setup(ctx) {
         // a combat spell uses runes on every cast
         get options() { const pl = player(), sp = pl.spellSelection.attack; return pl.attackType === "magic" && sp ? [{ costs: pl.getRuneCosts(sp).map((k) => ({ item: k.item, quantity: k.quantity * ev().attacks })), mult: 1 }] : NO_COSTS; },
         dungeon: run, // a Township task can send you here, but training goals don't (their XP numbers would be off)
-        need: () => fightNeed(skill, m, area), check: () => fightCheck(skill), active: () => fighting(m, area), start: () => startFight(skill, m, area),
+        need: () => fightNeed(skill, m, area), check: () => fightCheck(skill, m), active: () => fighting(m, area), start: () => startFight(skill, m, area),
         // e is the queue step: a fight you said you'd eat yourself for skips the auto eat check
         safe: (e) => {
           const hit = ev().hit, mode = e?.selfEat ? "self" : parts.noAutoEat?.() ? "noAuto" : null;

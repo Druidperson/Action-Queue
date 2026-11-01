@@ -58,7 +58,7 @@ Combat skills train by fighting, with the gear you have on. The queue picks the 
 
 - It sets the attack style that trains your skill and puts yours back when the step ends.
 - Attack and Strength need a melee weapon, Ranged needs a bow and ammo, Magic needs a magic weapon and a spell. If another equipment set has the right weapon, the queue switches to it, and back when the goal is done or you stop it. If not, it waits for you.
-- Prayer turns on your best prayer. Out of points, it buries your cheapest bones.
+- Prayer turns on your best prayer. When points run low it picks up the bones the fight drops and buries them, along with any in your bank, then prays again. With none left it keeps fighting with the prayer off until bones drop. It picks monsters that die fast and drop good bones, since that's what keeps a prayer going.
 - Slayer fights in Slayer areas you can enter, or on your Slayer task. With no task, it asks before rolling one and tells you how many of that tier's monsters are safe for you.
 - If you start a fight yourself while the queue runs, it pauses and leaves your fight alone.
 

@@ -535,6 +535,49 @@
     eq(bad.join("; "), "");
   });
 
+  const PR = "Prayer";
+  const prayerFight = (id) => S().skills.methodById(skill("Prayer"), S().fightId(game.monsters.getObjectByID(id)) ?? "");
+  test(PR, "a monster with no bones and an empty bank gives no Prayer XP in the plan", () => sandbox(() => {
+    for (const it of list(game.items)) if (it.prayerPoints > 0 && have(it)) take(it.id);
+    const noBones = list(game.monsters).find((m) => !m.bones?.item && S().fightId(m) && prayerFight(m.id));
+    if (!noBones) skip("no monster without bones");
+    S()._dev.secMemo.m.clear();
+    eq(prayerFight(noBones.id).xp, 0, `${noBones.name} XP:`);
+    ok(prayerFight("melvorD:Chicken").xp > 0, "Chicken should give some");
+  }));
+  test(PR, "out of points, a fight that drops bones keeps going", () => sandbox(async () => {
+    const pl = game.combat.player, pts = pl.prayerPoints;
+    for (const it of list(game.items)) if (it.prayerPoints > 0 && have(it)) take(it.id);
+    try {
+      pl.prayerPoints = 0;
+      eq(prayerFight("melvorD:Chicken").check(), null, "Chicken:");
+      const noBones = list(game.monsters).find((m) => !m.bones?.item && S().fightId(m) && prayerFight(m.id));
+      if (noBones) has(prayerFight(noBones.id).check()?.why ?? "", "out of prayer points");
+    } finally { pl.prayerPoints = pts; }
+  }));
+  test(PR, "bones in the loot window get picked up and buried when points run low", () => sandbox(async () => {
+    const pl = game.combat.player, pts = pl.prayerPoints, bones = item("melvorD:Bones"), loot = game.combat.loot;
+    for (const it of list(game.items)) if (it.prayerPoints > 0 && have(it)) take(it.id);
+    try {
+      pl.prayerPoints = 0;
+      loot.add(bones, 3, true);
+      prayerFight("melvorD:Chicken").check();
+      ok(!(loot.drops ?? []).some((d) => d.item === bones), "the bones are still in the loot window");
+      ok(pl.prayerPoints > 0, "no points from burying");
+    } finally { pl.prayerPoints = pts; const q = have(bones); if (q) game.bank.removeItemQuantity(bones, q, false); }
+  }));
+  test(PR, "a Prayer goal from zero points and no bones earns Prayer XP", () => sandbox(async () => {
+    liveOk();
+    const pl = game.combat.player, pr = skill("Prayer");
+    try { pl.setHitpoints(pl.stats.maxHitpoints); } catch (e) { /* ignore */ }
+    for (const it of list(game.items)) if (it.prayerPoints > 0 && have(it)) take(it.id);
+    pl.prayerPoints = 0; const xp0 = pr.xp;
+    add([{ kind: "train", skillId: pr.id, targetLevel: pr.level + 1, targetXp: S().skills.xpAt(pr.level + 1), qty: S().skills.xpAt(pr.level + 1), label: "Prayer test" }]);
+    A().runner.start();
+    ok(await waitFor(() => pr.xp > xp0 + 0.5, 40000, 500), `no Prayer XP: ${items().map((e) => `${e.kind}:${e.status} ${e.reason ?? ""}`).join(", ")} ${R().message}`);
+    ok(A().runner.state === "running", `stopped: ${R().message}`);
+  }), { live: true });
+
   // =================================================================================================================
   const MX = "More skills";
   test(MX, "Farming waits for crops, works on the next step meanwhile, then harvests", () => sandbox(async () => {
