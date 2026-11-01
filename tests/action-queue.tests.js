@@ -195,7 +195,8 @@
     const e = items()[0]; ok(e.startQty !== undefined, "step didn't start");
     give("melvorD:Normal_Logs", 4); bankUndo.pop(); // these get sold, nothing to put back
     await waitFor(() => e.status === "done", 8000);
-    eq(e.status, "done"); has(e.sold ?? "", "Sold 3 extra");
+    // at least the 3 it was given; more if the woodcutting cut another log before the step saw it was done
+    eq(e.status, "done"); const n = Number(/Sold (\d+) extra/.exec(e.sold ?? "")?.[1]); ok(n >= 3, `sold: ${e.sold}`);
   }), { live: true });
   test(RU, "auto-sell never touches what you owned before", () => sandbox(async () => {
     liveOk(); A().settings.set("autoSell", true);
@@ -387,6 +388,20 @@
     await waitFor(() => items().some((e) => e.kind === "train"), 4000, 100);
     const goal = items().find((e) => e.kind === "train" && e.skillId === "melvorD:Woodcutting"); ok(goal, "no goal was added");
     has(goal.label, "Woodcutting: reach level");
+  }));
+  test(TR, "the skill picker shows icons, splits combat from non-combat, and picking a skill works", () => sandbox(async () => {
+    await openTrain();
+    const pop = SwalLocale.getPopup();
+    pop.querySelector("[data-mst-pick]").click(); await sleep(150);
+    const heads = [...pop.querySelectorAll(".mst-pick-head")].map((h) => h.textContent);
+    eq(heads.join(","), "Combat,Non-combat", "headings:");
+    const items = [...pop.querySelectorAll(".mst-pick-item")];
+    ok(items.length && items.every((b) => b.querySelector("img")), "every skill should have an icon");
+    const firstNon = pop.querySelectorAll(".mst-pick-items")[1].querySelector(".mst-pick-item");
+    ok(!["Attack", "Strength", "Defence", "Hitpoints", "Ranged", "Magic", "Prayer", "Slayer"].includes(firstNon.querySelector("span").textContent), "a combat skill is under Non-combat");
+    const wc = items.find((b) => b.dataset.mstSkill === "melvorD:Woodcutting"); wc.click(); await sleep(150);
+    eq($("mst-tr-skill").value, "melvorD:Woodcutting", "picked:"); ok(!pop.querySelector(".mst-pick-list"), "the list should close");
+    has(pop.querySelector("[data-mst-pick]").textContent, "Woodcutting"); has($("mst-tr-prev").textContent, "Woodcutting");
   }));
   test(TR, "the Train window can switch to making an item", () => sandbox(async () => {
     await openTrain();

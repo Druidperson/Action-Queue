@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.6.1
+- The skill list in the Train window shows each skill's icon, and splits combat skills from non-combat ones. The selected skill shows its icon too.
+
 ## 2.6.0
 - You can use a prayer in any fight now. The Train window has a Prayer pick for combat skills, and so does the Township window for monster tasks. Choose Off, Automatic, or a specific prayer, each one listed with what it does and what it costs.
 - Automatic picks the best prayer you have for what you're doing: more accuracy for Attack, a bigger max hit for Strength, more evasion for Defence, Hitpoints and Township fights, and the matching ones for Ranged and Magic.

@@ -5,7 +5,7 @@
 //   3. Township tasks: the green play buttons on Township tasks, which plan a task and add its steps
 // The parts talk through `parts` below. Other mods still reach the queue as mod.api.actionQueue (or window.actionQueue).
 export function setup(ctx) {
-  const VERSION = "2.6.0";
+  const VERSION = "2.6.1";
   const parts = { aq: null, st: null, installed: false };
 
   // ======================================================================================================================
@@ -598,6 +598,15 @@ export function setup(ctx) {
       .aq-chip.ok{background:rgba(48,199,141,.25);color:#2fb67a} .aq-chip.warn{background:rgba(229,174,103,.25);color:#c98a2b}
       .aq-chip.lbl{background:transparent;padding-left:0;opacity:.85} .aq-chip>span{display:inline;line-height:20px} .aq-chip small{opacity:.8;font-size:.8em}
       .aq-form{display:grid;grid-template-columns:120px 1fr;gap:6px 10px;align-items:center;text-align:left;margin:0 0 10px}
+      .mst-pick-btn{display:flex;align-items:center;gap:6px;width:100%;text-align:left;cursor:pointer}
+      .mst-pick-btn img,.mst-pick-item img{width:20px;height:20px;object-fit:contain;flex:none}
+      .mst-pick-list{grid-column:1/-1;max-height:300px;overflow-y:auto;border:1px solid rgba(127,127,127,.35);border-radius:6px;padding:4px;text-align:left}
+      .mst-pick-head{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;opacity:.65;padding:6px 6px 3px;border-bottom:1px solid rgba(127,127,127,.3);margin-bottom:3px}
+      .mst-pick-head:not(:first-child){margin-top:6px}
+      .mst-pick-items{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:2px}
+      .mst-pick-item{display:flex;align-items:center;gap:6px;width:100%;padding:4px 6px;border:0;border-radius:4px;background:transparent;color:inherit;text-align:left;font-size:13px;cursor:pointer}
+      .mst-pick-item:hover{background:rgba(127,127,127,.18)} .mst-pick-item.sel{background:rgba(48,199,141,.22)}
+      .mst-pick-item small{margin-left:auto;opacity:.65}
       .aq-form label{margin:0;font-size:13px;opacity:.85} .aq-form select,.aq-form input[type=number]{width:100%}
       .aq-swal .swal2-actions{display:flex;justify-content:center;align-items:center;gap:5px;flex-wrap:nowrap;margin:1em auto 0}
       .aq-swal .swal2-actions :is(.swal2-deny,.swal2-cancel,.swal2-confirm){height:36px!important;padding:0 16px!important;font-size:14px!important;line-height:1!important;box-sizing:border-box!important;
@@ -1816,6 +1825,14 @@ export function setup(ctx) {
 
     // skills with something to do (Harvesting stays hidden until the Abyssal realm is unlocked)
     const trainSkills = () => list(game.skills).filter((s) => isTrainable(s) && methodsOf(s).length);
+    // The skill picker: a button with the skill's icon that opens a list split into combat and non-combat skills. The
+    // real <select id="mst-tr-skill"> stays (hidden) so picking still goes through the same change handler.
+    const skillGroups = () => { const all = trainSkills(); return [["Combat", all.filter((s) => COMBAT.has(s.id))], ["Non-combat", all.filter((s) => !COMBAT.has(s.id))]].filter(([, l]) => l.length); };
+    const skillImg = (s) => (typeof s?.media === "string" ? `<img src="${esc(s.media)}" alt="">` : "");
+    const skillPicker = (sk) => `<button type="button" class="mst-pick-btn custom-select custom-select-sm" data-mst-pick title="Pick a skill">${skillImg(sk)}<span>${esc(nm(sk))} (level ${sk?.level ?? 1})</span></button>` +
+      `<select id="mst-tr-skill" hidden>${skillGroups().map(([g, l]) => `<optgroup label="${g}">${l.map((s) => opt(s.id, `${nm(s)} (level ${s.level})`, s.id === TS.skillId)).join("")}</optgroup>`).join("")}</select>`;
+    const skillPickList = () => `<div class="mst-pick-list">${skillGroups().map(([g, l]) => `<div class="mst-pick-head">${g}</div><div class="mst-pick-items">` +
+      l.map((s) => `<button type="button" class="mst-pick-item${s.id === TS.skillId ? " sel" : ""}" data-mst-skill="${esc(s.id)}">${skillImg(s)}<span>${esc(nm(s))}</span><small>${s.level}</small></button>`).join("") + `</div>`).join("")}</div>`;
     // items a skill can be asked to make: its methods that are the usual way to make their product
     const makeables = (skill) => methodsOf(skill).filter((m) => m.product && stepFor(m) && !stepFor(m).own).sort((x, y) => x.level - y.level);
     // what a goal does first that the plan below doesn't show (switch gear, roll a Slayer task, make a map)
@@ -1900,7 +1917,7 @@ export function setup(ctx) {
     const trainForm = () => {
       const sk = skillById(TS.skillId);
       return `<div class="aq-form">` +
-        field("Skill", select("mst-tr-skill", trainSkills().map((s) => opt(s.id, `${nm(s)} (level ${s.level})`, s.id === TS.skillId)).join(""))) +
+        field("Skill", skillPicker(sk)) + (TS.pickOpen ? skillPickList() : "") +
         field("Goal", select("mst-tr-goal", opt("level", "Train to a level", TS.goal === "level") + (makeables(sk).length ? opt("make", "Make an amount of an item", TS.goal === "make") : ""))) +
         (TS.goal === "make"
           ? field("Item", select("mst-tr-item", makeables(sk).map((m) => opt(m.id, `${nm(m.product)} (level ${m.level}${m.level > sk.level ? ", locked" : ""})`, m.id === TS.make)).join(""))) +
@@ -1998,7 +2015,7 @@ export function setup(ctx) {
       if (prev) prev.innerHTML = trainBuild().html;
     };
     const openTrain = () => {
-      Object.assign(TS, { skillId: null, make: null, level: null, forced: "", prayer: lastPrayer() });
+      Object.assign(TS, { skillId: null, make: null, level: null, forced: "", prayer: lastPrayer(), pickOpen: false });
       fixTrain();
       if (!TS.skillId) return;
       SwalLocale.fire({
@@ -2009,7 +2026,13 @@ export function setup(ctx) {
         customClass: { popup: "aq-swal", confirmButton: "btn btn-primary m-1", denyButton: "btn btn-success m-1", cancelButton: "btn btn-warning m-1" },
         didOpen: (popup) => {
           for (const t of ["input", "change"]) popup.addEventListener(t, (ev) => onTrainEvent(popup, ev));
-          popup.addEventListener("click", (ev) => { if (ev.target.closest?.("[data-mst-build]")) { queueBuild(); const prev = popup.querySelector("#mst-tr-prev"); if (prev) prev.innerHTML = trainBuild().html; } });
+          popup.addEventListener("click", (ev) => {
+            if (ev.target.closest?.("[data-mst-build]")) { queueBuild(); const prev = popup.querySelector("#mst-tr-prev"); if (prev) prev.innerHTML = trainBuild().html; return; }
+            const form = popup.querySelector("#mst-tr-form"), item = ev.target.closest?.("[data-mst-skill]");
+            // open or close the skill list, or pick a skill from it (through the hidden select, so the usual handler runs)
+            if (ev.target.closest?.("[data-mst-pick]")) { TS.pickOpen = !TS.pickOpen; if (form) form.innerHTML = trainForm(); return; }
+            if (item) { TS.pickOpen = false; const sel = popup.querySelector("#mst-tr-skill"); if (sel) { sel.value = item.dataset.mstSkill; sel.dispatchEvent(new Event("change", { bubbles: true })); } return; }
+          });
         },
         width: 620,
       })?.then?.((r) => { try { if (r?.isDenied) trainQueue(false); else if (r?.dismiss === "cancel") trainQueue(true); } catch (e) { console.warn(TAG, e); } });
