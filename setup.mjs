@@ -5,7 +5,7 @@
 //   3. Township tasks: the green play buttons on Township tasks, which plan a task and add its steps
 // The parts talk through `parts` below. Other mods still reach the queue as mod.api.actionQueue (or window.actionQueue).
 export function setup(ctx) {
-  const VERSION = "2.7.0";
+  const VERSION = "2.7.1";
   const parts = { aq: null, st: null, installed: false };
 
   // ======================================================================================================================
@@ -315,12 +315,30 @@ export function setup(ctx) {
           if ((!Settings.get("autoSell") && !entry.sellAll) || (entry.kind !== "craft" && entry.kind !== "gather") || entry.startQty === undefined) return;
           const item = itemById(entry.itemId), bi = item?.sellsFor?.quantity > 0 && game.bank.items.get(item);
           if (!bi || bi.locked) return;
-          const extra = Math.min(bi.quantity, bi.quantity - entry.startQty - (entry.sellAll ? 0 : entry.qty));
+          const extra = Math.min(bi.quantity, bi.quantity - (entry.sellAll ? entry.base ?? entry.startQty : entry.startQty + entry.qty));
           if (!(extra >= 1)) return;
           const price = game.bank.getItemSalePrice(item, extra);
           game.bank.processItemSale(item, extra);
           entry.sold = `Sold ${num(extra)}${entry.sellAll ? "" : " extra"} for ${num(price)} ${nm(item.sellsFor.currency)}`;
         } catch (e) { console.warn(TAG, "auto-sell", e); }
+      },
+      // a finished goal set to sell what it makes sells what's left of everything its steps made (bars and ore left over,
+      // and anything a Stop made it lose track of), never more than you had before the goal
+      sellLeftovers(goal) {
+        if (!goal.sellMade || !goal.made) return;
+        const got = new Map();
+        for (const [id, base] of Object.entries(goal.made)) {
+          try {
+            const item = itemById(id), bi = item && game.bank.items.get(item);
+            if (!bi || bi.locked || !(item.sellsFor?.quantity > 0)) continue;
+            const extra = Math.min(bi.quantity, bi.quantity - base);
+            if (!(extra >= 1)) continue;
+            const price = game.bank.getItemSalePrice(item, extra), cur = nm(item.sellsFor.currency);
+            game.bank.processItemSale(item, extra);
+            const t = got.get(cur) ?? { n: 0, gp: 0 }; t.n += extra; t.gp += price; got.set(cur, t);
+          } catch (e) { console.warn(TAG, "selling leftovers", e); }
+        }
+        if (got.size) goal.sold = `Sold ${num([...got.values()].reduce((t, x) => t + x.n, 0))} left over for ${[...got].map(([c, x]) => `${num(x.gp)} ${c}`).join(" + ")}`;
       },
       finish(entry) { this.sellExtra(entry); entry.status = "done"; delete entry.reason; this.halt(this.actorOf(entry)); this.release(); Queue.save(); },
       wait(msg) { this.message = msg; Panel.render(); },
@@ -337,7 +355,7 @@ export function setup(ctx) {
           // go above it, and it comes back when they're done
           if (cur.kind === "train") {
             const sk = skillById(cur.skillId);
-            if (!sk || sk.level >= cur.targetLevel || (cur.targetXp !== undefined && (sk.xp ?? 0) >= cur.targetXp)) { this.finish(cur); try { T?.trainFinished?.(cur); } catch (e) { console.warn(TAG, e); } continue; }
+            if (!sk || sk.level >= cur.targetLevel || (cur.targetXp !== undefined && (sk.xp ?? 0) >= cur.targetXp)) { this.finish(cur); this.sellLeftovers(cur); try { T?.trainFinished?.(cur); } catch (e) { console.warn(TAG, e); } continue; }
             if (!T?.plan) return this.block(cur, NO_TRAINER);
             const xpNow = Math.floor(sk.xp ?? 0);
             cur.stall = cur.lastXp !== undefined && xpNow <= cur.lastXp ? (cur.stall ?? 0) + 1 : 0;
@@ -391,6 +409,11 @@ export function setup(ctx) {
             Object.assign(this, { activeId: cur.id, activeActor: this.actorOf(cur) });
             cur.status = "active"; delete cur.reason;
             if (cur.kind !== "manual" && cur.startQty === undefined) cur.startQty = this.value(cur);
+            // what you had before this step ever ran: kept through Stop and reloads, so selling never takes what you owned
+            if (cur.kind !== "manual" && cur.base === undefined) cur.base = this.value(cur);
+            // a goal set to sell what it makes remembers what you had of each thing its steps make, for its clean-up
+            const g = cur.parent && Queue.items.find((x) => x.id === cur.parent && x.kind === "train" && x.sellMade);
+            if (g && cur.itemId && (cur.kind === "craft" || cur.kind === "gather")) { g.made ??= {}; if (g.made[cur.itemId] === undefined) g.made[cur.itemId] = cur.base; }
             Queue.save();
             if (cur.kind !== "manual" && !T.ticks?.(cur)) {
               const r = T.start(cur);
@@ -1939,7 +1962,7 @@ export function setup(ctx) {
           : field("Target level", numberInput("mst-tr-level", TS.level, `min="${sk.level + 1}" max="${levelCap(sk)}"`)) +
             field("Method", select("mst-tr-method", opt("", "Best available (recommended)", !TS.forced) + trainCands(sk).map((c) => opt(c.a.id, `${nm(c.a)} (about ${num(Math.round(c.rate))} XP/h)`, c.a.id === TS.forced)).join(""))) +
             (praysIn(sk) ? field("Prayer", select("mst-tr-prayer", prayerOptions(sk, TS.prayer))) : "") +
-            check("mst-tr-sell", TS.sell, "Sell the items it makes") + check("mst-tr-mastery", mastery(), "Prefer mastery XP")) +
+            check("mst-tr-sell", TS.sell, "Sell what it makes, and what's left over at the end") + check("mst-tr-mastery", mastery(), "Prefer mastery XP")) +
         `</div>`;
     };
     const nothing = (problem, html = note(esc(problem))) => ({ html, entries: [], problem });

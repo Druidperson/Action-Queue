@@ -78,6 +78,10 @@ Every requirement in your Township task list gets a green play button. Press it 
 - XP tasks use the same planner as the Train window and switch methods as you level up.
 - If it can't find where an item comes from, it points you to the wiki.
 
+## Selling what a goal makes
+
+Tick "Sell what it makes, and what's left over at the end" in the Train window and the queue sells what a level goal crafts as it goes. When the goal is done it also sells the leftovers its steps made, like bars or ore it didn't end up needing. Anything you had before the goal started is never sold.
+
 ## The panel
 
 - Start, pause, resume and stop

@@ -207,6 +207,29 @@
     await waitFor(() => items()[0].status === "done", 8000);
     ok(have("melvorD:Normal_Logs") >= before, `owned logs were sold: had ${before}, now ${have("melvorD:Normal_Logs")}`);
   }), { live: true });
+  test(RU, "after Stop and Start, a sell-everything step still sells what it made before the Stop", () => sandbox(async () => {
+    liveOk(); A().settings.set("autoSell", false);
+    const logs = item("melvorD:Normal_Logs"), mine = have(logs);
+    add([logStep(3, { sellAll: true })]);
+    A().runner.start(); await waitFor(() => have(logs) >= mine + 1, 15000);
+    A().runner.stop(); await sleep(300);
+    eq(items()[0].base, mine, "remembered what you had");
+    A().runner.start(); await waitFor(() => items()[0].status === "done", 20000);
+    eq(items()[0].status, "done", items()[0].reason ?? R().message);
+    eq(have(logs), mine, "logs made before the Stop weren't sold");
+  }), { live: true });
+  test(RU, "a finished goal set to sell sells what's left of what its steps made, and nothing you had before", () => sandbox(async () => {
+    const bar = item("melvorD:Iron_Bar"), ore = item("melvorD:Iron_Ore");
+    give(bar.id, 5); const mineBars = have(bar), mineOre = have(ore);
+    const goal = { id: "g1", kind: "train", skillId: "melvorD:Smithing", sellMade: true, made: { [bar.id]: mineBars, [ore.id]: mineOre }, label: "sell test" };
+    // the goal's steps left 7 bars and 3 ore over
+    game.bank.addItem(bar, 7, false, false, true); game.bank.addItem(ore, 3, false, false, true);
+    R().sellLeftovers(goal);
+    eq(have(bar), mineBars, "bars:"); eq(have(ore), mineOre, "ore:"); has(goal.sold ?? "", "Sold 10 left over");
+    // a goal without the setting leaves things alone
+    game.bank.addItem(bar, 2, false, false, true); bankUndo.push(() => game.bank.removeItemQuantity(bar, 2, false));
+    R().sellLeftovers({ ...goal, sellMade: false, sold: undefined }); eq(have(bar), mineBars + 2);
+  }));
   test(RU, "a craft step uses what's in the bank", () => sandbox(async () => {
     liveOk();
     give("melvorD:Copper_Ore", 2); give("melvorD:Tin_Ore", 2);

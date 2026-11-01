@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.7.1
+- Fixed: with "Sell what it makes" on, pressing Stop and then Start made the queue forget what it had already made, so none of it got sold. It now remembers what you had before the step first ran, through Stop and reloads.
+- A goal with selling on now also sells what's left over when it finishes: bars, ore and anything else its steps made but didn't use. It never sells anything you had before the goal started.
+- The checkbox in the Train window says "Sell what it makes, and what's left over at the end" now.
+
 ## 2.7.0
 - Plans use the game's real numbers now instead of the base ones: your XP bonuses, your speed bonuses, the chance to keep the materials (it grows with mastery) and the chance to make double. Before, a long Smithing goal could end with thousands of bars left over, because every craft that kept its bars was still counted as using them.
 - Level goals plan about an hour of work at a time instead of the whole climb at once. Your mastery keeps growing while you train, so each new batch uses the new numbers and uses up anything left from the last one first.
