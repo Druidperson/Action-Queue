@@ -1036,6 +1036,21 @@
     A().panel.close(); await sleep(100); ok(p.style.display === "none", "panel didn't close");
   }));
 
+  test(PN, "the buttons stay on screen on pages without the skill bar", async () => {
+    const back = game.openPage, pages = (id) => game.pages.getObjectByID(id);
+    const shown = (el) => { const r = el?.getBoundingClientRect(); return !!r && r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== "hidden"; };
+    try {
+      changePage(pages("melvorD:Bank"), -1, undefined, false, false); await sleep(400);
+      const fb = document.getElementById("aq-float-bar"), q = document.getElementById("aq-queue-btn"), t = document.getElementById("mst-train-btn");
+      ok(fb?.contains(q) && fb.contains(t), "buttons didn't move to the floating bar on the Bank page");
+      ok(shown(q) && shown(t), "buttons aren't visible on the Bank page");
+      changePage(pages("melvorD:Woodcutting"), -1, undefined, false, false); await sleep(400);
+      const bar = document.getElementById("skill-footer-minibar");
+      ok(bar.contains(q) && bar.contains(t), "buttons didn't go back to the skill bar");
+      eq(getComputedStyle(fb).display, "none");
+    } finally { if (back && back !== game.openPage) changePage(back, -1, undefined, false, false); }
+  });
+
   // =================================================================================================================
   const run = async (opts = {}) => {
     const { live = true, group = null, only = null } = opts;

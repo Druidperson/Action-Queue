@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.7.2
+- The queue and Train buttons show on every page now. On pages where the game hides the bottom-right menu (Bank, Combat, Shop, Settings and so on), they sit in the same corner on their own, then go back in the menu when you go back to a skill.
+
 ## 2.7.1
 - Fixed: with "Sell what it makes" on, pressing Stop and then Start made the queue forget what it had already made, so none of it got sold. It now remembers what you had before the step first ran, through Stop and reloads.
 - A goal with selling on now also sells what's left over when it finishes: bars, ore and anything else its steps made but didn't use. It never sells anything you had before the goal started.

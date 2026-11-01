@@ -5,7 +5,7 @@
 //   3. Township tasks: the green play buttons on Township tasks, which plan a task and add its steps
 // The parts talk through `parts` below. Other mods still reach the queue as mod.api.actionQueue (or window.actionQueue).
 export function setup(ctx) {
-  const VERSION = "2.7.1";
+  const VERSION = "2.7.2";
   const parts = { aq: null, st: null, installed: false };
 
   // ======================================================================================================================
@@ -585,6 +585,7 @@ export function setup(ctx) {
         let b = document.getElementById(id);
         if (b) return b;
         bar.insertBefore((b = Object.assign(document.createElement("button"), { id, title, className: "btn btn-sm btn-light", innerHTML: html })), before ?? null);
+        b.dataset.aqButton = "1";
         b.addEventListener("click", () => { try { onClick(); } catch (e) { console.warn(TAG, e); } b.blur(); });
         return b;
       };
@@ -592,6 +593,32 @@ export function setup(ctx) {
       const q = mk("aq-queue-btn", "Action Queue", iconHtml("fa-list-ol", 17) + '<span class="aq-count"></span>', () => Panel.toggle());
       updateBadge();
       sizeLike(q);
+      placeButtons();
+    };
+    // The game hides its minibar on pages that aren't a skill (Combat, Bank, Shop, Settings). There, the queue button and
+    // any button added with addButton (the Train button) move to a small bar of our own in the same corner, and back
+    // into the minibar when it shows again.
+    const placeButtons = () => {
+      const cont = document.getElementById("skill-footer-minibar-container"), bar = document.getElementById("skill-footer-minibar");
+      if (!cont || !bar) return;
+      let fb = document.getElementById("aq-float-bar");
+      if (!fb) { fb = Object.assign(document.createElement("div"), { id: "aq-float-bar", className: "sidemenu bg-white rounded" }); document.body.appendChild(fb); }
+      const hidden = cont.classList.contains("d-none") || getComputedStyle(cont).display === "none";
+      const ours = [...bar.children, ...fb.children].filter((c) => c.dataset?.aqButton);
+      // the queue button stays last, like in the minibar
+      ours.sort((x, y) => (x.id === "aq-queue-btn") - (y.id === "aq-queue-btn"));
+      const to = hidden ? fb : bar;
+      for (const b of ours) if (b.parentElement !== to || to.lastElementChild !== ours[ours.length - 1]) to.appendChild(b);
+      fb.style.display = hidden && ours.length ? "block" : "none";
+    };
+    let placeWatch = null;
+    const watchMinibar = () => {
+      const cont = document.getElementById("skill-footer-minibar-container");
+      if (!cont || placeWatch?.el === cont) return;
+      placeWatch?.obs.disconnect();
+      const obs = new MutationObserver(() => placeButtons());
+      obs.observe(cont, { attributes: true, attributeFilter: ["class", "style"] });
+      placeWatch = { el: cont, obs };
     };
     // other mods' minibar buttons go next to the queue button, sized like their neighbours
     const sizeLike = (b) => {
@@ -603,10 +630,14 @@ export function setup(ctx) {
       if (!bar) return null;
       let b = document.getElementById(id);
       if (!b) {
-        bar.insertBefore((b = Object.assign(document.createElement("button"), { id, title, className: "btn btn-sm btn-light", innerHTML: `<i class="fa ${fa} text-dark aq-ico" style="font-size:${size}px"></i>` })), document.getElementById("aq-queue-btn"));
+        // next to the queue button, wherever it is right now (the minibar, or our own bar on pages without one)
+        const q = document.getElementById("aq-queue-btn"), into = q?.parentElement ?? bar;
+        into.insertBefore((b = Object.assign(document.createElement("button"), { id, title, className: "btn btn-sm btn-light", innerHTML: `<i class="fa ${fa} text-dark aq-ico" style="font-size:${size}px"></i>` })), q?.parentElement ? q : null);
+        b.dataset.aqButton = "1";
         b.addEventListener("click", () => { try { onClick(); } catch (e) { console.warn(TAG, e); } b.blur(); });
       }
       sizeLike(b);
+      placeButtons();
       return b;
     };
 
@@ -620,6 +651,7 @@ export function setup(ctx) {
       .aq-chip img,.aq-title img.skill-icon-xs{width:18px;height:18px;margin:0 3px 0 0;vertical-align:middle}
       .aq-chip.ok{background:rgba(48,199,141,.25);color:#2fb67a} .aq-chip.warn{background:rgba(229,174,103,.25);color:#c98a2b}
       .aq-chip.lbl{background:transparent;padding-left:0;opacity:.85} .aq-chip>span{display:inline;line-height:20px} .aq-chip small{opacity:.8;font-size:.8em}
+      #aq-float-bar{position:fixed;right:5px;bottom:5px;z-index:999;display:none}
       .aq-form{display:grid;grid-template-columns:120px 1fr;gap:6px 10px;align-items:center;text-align:left;margin:0 0 10px}
       .mst-pick-btn{display:flex;align-items:center;gap:6px;width:100%;text-align:left;cursor:pointer}
       .mst-pick-btn img,.mst-pick-item img{width:20px;height:20px;object-fit:contain;flex:none}
@@ -649,7 +681,8 @@ export function setup(ctx) {
       document.head.appendChild(Object.assign(document.createElement("style"), { id: "aq-style", textContent: CSS }));
       Queue.load(); mountButton();
       clearInterval(window.__aqTimer);
-      window.__aqTimer = setInterval(mountButton, 2000); // the game can rebuild the menu; put the button back if it vanishes
+      window.__aqTimer = setInterval(() => { mountButton(); watchMinibar(); }, 2000); // the game can rebuild the menu; put the button back if it vanishes
+      watchMinibar();
       clearInterval(window.__aqRunTimer);
       window.__aqRunTimer = setInterval(() => {
         try { Runner.step(); } catch (e) { console.warn(TAG, "runner", e); }

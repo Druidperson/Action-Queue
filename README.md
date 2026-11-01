@@ -11,6 +11,8 @@ Action Queue adds two buttons to the bottom-right menu:
 - The chart button opens the Train window. Pick a skill and a goal.
 - The list button is your queue.
 
+They're there on every page. Where the game hides that menu, like the Bank or Combat, the two buttons stay in the same corner on their own.
+
 Township tasks also get a green play button next to every requirement. Click one to plan that task.
 
 Once there's something in the list, press Start and walk away.
