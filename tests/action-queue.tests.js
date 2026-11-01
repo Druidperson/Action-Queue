@@ -7,8 +7,8 @@
  * Options: AQTests.run({ live: false })          skip tests that start real game actions
  *          AQTests.run({ group: "Queue" })       one group only
  *          AQTests.run({ only: /duplicate/i })   tests whose name matches
- * Progress is kept in AQTests.last while it runs. The queue, settings, bank items and GP a test touches are put back
- * afterwards. Keep the game tab in front while it runs: hidden tabs pause the game and the live tests will skip.
+ * Progress is kept in AQTests.last while it runs. Tests that need items (seeds, runes) put them in the bank, and the queue,
+ * settings, bank items and GP a test touches are put back afterwards. Made for a test save: some tests heal you or fight. Keep the game tab in front while it runs: hidden tabs pause the game and the live tests will skip.
  */
 (() => {
   "use strict";
@@ -463,6 +463,9 @@
 
   test(CB, "a goal that switches gear switches back on Stop, and again on Start", () => sandbox(async () => {
     liveOk();
+    // the game won't switch sets mid-fight, so let any fight from an earlier test end first
+    try { if (game.activeAction) game.stopActiveAction(); } catch (e) { /* ignore */ }
+    await waitFor(() => !game.combat.isActive && !game.activeAction, 4000); await sleep(800);
     const pl = game.combat.player, mine = pl.selectedEquipmentSet;
     const id = ["Ranged", "Attack", "Strength", "Magic"].find((n) => /switches to it/.test(S().plan.goalFirst(skill(n)) ?? ""));
     if (!id) skip("none of your other equipment sets has a weapon a goal would switch to");
@@ -516,6 +519,8 @@
       .filter((x) => x.b && S().fightId(x.b)?.includes(`:${x.d.id}:`) && T()._dev.queueSafety(x.b, true).ok && !T()._dev.areaMissing(x.b).length)
       .map((x) => ({ ...x, max: Math.max(...[...new Set(x.d.monsters)].map((y) => T()._dev.fightSafety(y).max ?? Infinity)) }))
       .filter((x) => x.max * 2 < hp).sort((a, b) => a.max - b.max)[0]?.d;
+    // start at full HP (it runs a few seconds of a real fight)
+    try { game.combat.player.setHitpoints(hp); } catch (e) { /* older game */ }
     if (game.combat.player.hitpoints < hp * 0.9) skip("your HP isn't full");
     if (!dg) skip("no dungeon you can run");
     const boss = dg.monsters[dg.monsters.length - 1];
@@ -537,7 +542,7 @@
     const f = game.farming, pot = item("melvorD:Potatoes");
     const plot = list(f.plots).find((p) => p.category?.id === "melvorD:Allotment" && p.state !== 0);
     if (!plot) skip("no unlocked Allotment plot");
-    if (plot.state === 1 && have("melvorD:Potato_Seed") < 3) skip("needs 3 Potato Seeds to plant");
+    if (plot.state === 1 && have("melvorD:Potato_Seed") < 3) give("melvorD:Potato_Seed", 5);
     if (plot.state === 2 && plot.plantedRecipe?.product !== pot) skip("the plot is growing something else");
     const origChance = f.getPlotGrowthChance;
     A().settings.set("sideJobs", true); A().settings.set("autoBuy", false);
@@ -555,6 +560,9 @@
   }), { live: true });
   test(MX, "Alt Magic casts on something the queue can make and reaches the goal", () => sandbox(async () => {
     liveOk();
+    // Just Learning needs runes and something to cast on: put some in the bank first
+    for (const [id, n] of [["melvorF:Nature_Rune", 20], ["melvorD:Air_Rune", 20], ["melvorD:Fire_Rune", 40], ["melvorD:Iron_Arrowtips", 10]]) if (item(id)) give(id, n);
+    S()._dev.secMemo.m.clear();
     const mg = skill("Magic"), c = S().plan.trainPlan(mg, mg.level + 1, null).batches[0]?.c;
     if (!c || !c.opt?.costs?.length) skip("no Alt Magic method at this level");
     for (const k of c.opt.costs) give(k.item.id, k.quantity * 10);
