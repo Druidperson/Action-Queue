@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.4.0
+- Item upgrades work now. Things like the (G) Adamant Shield from the Normal Township task plan all the way through: the queue mines and smiths the Adamant Shield, makes the Silver and Gold Bars, then upgrades to (S) and then to (G). Each upgrade that costs GP asks you first and shows the full cost. Skip turns it into a step you do yourself.
+- The window shows the GP an upgrade costs, and warns you if you don't have enough yet.
+- Upgrades only count for items nothing else makes, so plans that already worked through a skill or the shop don't change. Potion and downgrade upgrades are left out.
+- Fixed: a Township task that needed something from a Bird Nest or another container added the "open" step but not the step that gets the containers.
+
 ## 2.3.0
 - New setting, on by default: Claim mastery tokens automatically. While the queue runs, tokens get claimed as they drop so they don't fill up your bank. It stops at a full mastery pool like the game's Claim button does, and the rest wait in your bank. Instead of the game's two pop-ups per claim, you get one message a minute at most.
 - Potions at every tier have a known source now. Things like Divine Potion IV used to say "no source found". Now they plan through their Herblore recipe and tell you what's missing, like Herblore 57 and Divine Potion mastery 90, since the tier you brew comes from your mastery.

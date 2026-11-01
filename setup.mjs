@@ -5,7 +5,7 @@
 //   3. Township tasks: the green play buttons on Township tasks, which plan a task and add its steps
 // The parts talk through `parts` below. Other mods still reach the queue as mod.api.actionQueue (or window.actionQueue).
 export function setup(ctx) {
-  const VERSION = "2.3.0";
+  const VERSION = "2.4.0";
   const parts = { aq: null, st: null, installed: false };
 
   // ======================================================================================================================
@@ -1187,6 +1187,28 @@ export function setup(ctx) {
     const xpRate = (m) => (m.ms > 0 ? ((m.xp * m.succ) / m.ms) * 3600000 : 0);
     // where each item comes from. Magic only makes what no other skill makes, so bars still come from Smithing.
     let idx = null;
+    // ---------- item upgrades ----------
+    // Some items are made in the bank by upgrading another one: (S) Adamant Shield plus Gold Bars and GP makes (G) Adamant
+    // Shield. They plan like a recipe made "in the bank", so the planner gets the parts first; the step itself asks you before
+    // it spends anything. Potions (same mastery rule as brewing) and downgrades are left out, and so is anything a skill or
+    // the shop already gives, so existing plans don't change.
+    const UPGRADE = "aq:upgrade";
+    const UPG = { id: UPGRADE, name: "Bank", localID: "Upgrade", level: Infinity, media: "assets/media/main/bank_header.png" };
+    let upList = null;
+    const upgradeList = () => (upList ??= [...new Set([...(game.bank?.itemUpgrades?.values?.() ?? [])].flat())]
+      .filter((u) => !u.isDowngrade && u.upgradedItem && u.upgradedItem.constructor?.name !== "PotionItem" && u.itemCosts?.length));
+    const upMethods = new Map();
+    const upgradeMethod = (u) => {
+      if (!upMethods.has(u)) {
+        const q = u.upgradedQuantity ?? 1;
+        upMethods.set(u, { id: `${UPGRADE}:${u.upgradedItem.id}`, skill: UPG, a: u, upgrade: u, name: `Upgrade to ${nm(u.upgradedItem)}`, media: u.upgradedItem.media, level: 1,
+          product: u.upgradedItem, qty: q, baseQuantity: q, succ: 1, ms: 0, xp: 0, noMastery: true, itemCosts: u.itemCosts, options: [{ costs: u.itemCosts, mult: 1 }] });
+      }
+      return upMethods.get(u);
+    };
+    const upgradeCost = (u, n) => ({ cur: (u.currencyCosts ?? []).map((k) => ({ currency: k.currency, quantity: k.quantity * n })), items: u.itemCosts.map((k) => ({ item: k.item, quantity: k.quantity * n })) });
+    const upgradeOf = (item) => { const c = index().crafters.get(item?.id)?.[0]; return c?.skill === UPG ? c.a.upgrade : null; };
+
     // Herblore brews the tier your mastery of the recipe is at (tier II from mastery 20, III from 50, IV from 90). Any
     // other tier can't be brewed right now; this says why, or null when it can (or the item isn't a potion).
     const potionGap = (item) => {
@@ -1207,6 +1229,8 @@ export function setup(ctx) {
       for (const m of skills.filter((s) => EXTRA.has(s.id)).flatMap(methodsOf).filter((m) => m.product && !m.own && !known(m.product.id))) add(m);
       // every tier of a potion comes from its recipe, not just the tier your mastery is at now
       for (const m of skills.flatMap(methodsOf)) for (const p of m.tiers ?? []) if (p?.id && !(idx.crafters.get(p.id) ?? []).some((x) => x.a === m)) idx.crafters.set(p.id, [...(idx.crafters.get(p.id) ?? []), { skill: m.skill, a: m }]);
+      // bank upgrades, for items nothing else makes
+      for (const u of upgradeList()) { const id = u.upgradedItem.id; if (!known(id) && !shopFor(u.upgradedItem)) idx.crafters.set(id, [{ skill: UPG, a: upgradeMethod(u) }]); }
       return idx;
     };
     // an extra source only counts once you can use it (the level, an unlocked plot); until then the item is a step you do yourself
@@ -1278,9 +1302,17 @@ export function setup(ctx) {
           const { c, opt, crafts } = n.recipe;
           const alts = (index().crafters.get(n.item.id)?.length ?? 1) - 1 + c.a.options.length - 1;
           const uses = opt.costs.map((x) => chip(`${icon(x.item)}${num(x.quantity * crafts)} ${esc(nm(x.item))}`));
-          title = `${icon(c.skill)}<b>${esc(nm(c.skill))}</b>: make ${icon(n.item)}<b>${esc(nm(n.item))}</b> &times;${num(n.qty)}`;
-          body = chips(chip(`Level ${lvl(c.a)}`), chip(plural(crafts, "craft")), haveChip, alts > 0 ? chip(plural(alts, "other option")) : "") +
-            (uses.length ? chips(chip("<b>Uses</b>", "lbl"), ...uses) : "") + (lvlChip(c.skill, c.a) ? chips(lvlChip(c.skill, c.a)) : "");
+          if (c.skill === UPG) {
+            const cost = upgradeCost(c.a.upgrade, crafts), short = cost.cur.filter((k) => (k.currency.amount ?? 0) < k.quantity);
+            title = `${icon(n.item)}<b>Upgrade to ${esc(nm(n.item))}</b> &times;${num(n.qty)}`;
+            body = chips(chip(plural(crafts, "upgrade")), haveChip, chip("In the bank, asks you first", "ok")) + (uses.length ? chips(chip("<b>Uses</b>", "lbl"), ...uses) : "") +
+              (cost.cur.length ? chips(chip("<b>Costs</b>", "lbl"), ...cost.cur.map((k) => chip(`${num(k.quantity)} ${esc(nm(k.currency))}`, short.includes(k) ? "warn" : ""))) : "") +
+              (short.length ? chips(chip(`${warnIcon}You don't have enough ${esc(short.map((k) => nm(k.currency)).join(" or "))} yet`, "warn")) : "");
+          } else {
+            title = `${icon(c.skill)}<b>${esc(nm(c.skill))}</b>: make ${icon(n.item)}<b>${esc(nm(n.item))}</b> &times;${num(n.qty)}`;
+            body = chips(chip(`Level ${lvl(c.a)}`), chip(plural(crafts, "craft")), haveChip, alts > 0 ? chip(plural(alts, "other option")) : "") +
+              (uses.length ? chips(chip("<b>Uses</b>", "lbl"), ...uses) : "") + (lvlChip(c.skill, c.a) ? chips(lvlChip(c.skill, c.a)) : "");
+          }
         } else {
           const g = (index().gatherers.get(n.item.id) ?? []).filter(usable), lb = gatherBlock(n.item.id);
           title = `${icon(n.item)}<b>${esc(nm(n.item))}</b> &times;${num(n.qty)}`;
@@ -1301,6 +1333,8 @@ export function setup(ctx) {
     const plotAsk = (f, r) => { const p = !openPlots(f, r).length && lockedPlot(f, r); return p ? [{ kind: "ask", what: "plot", skillId: f.id, actionId: p.id, qty: 1, label: `Farming: unlock a ${nm(r.category)} plot` }] : []; };
     const toEntries = (rows) => rows.flatMap((n) => {
       const base = { itemId: n.item.id, qty: n.qty }, c = n.recipe?.c, g = !c && gatherer(n.item.id);
+      // qty for an upgrade step is how many you should own, like a buy step
+      if (c?.skill === UPG) return [{ ...base, qty: owned(n.item) + n.qty, kind: "ask", what: "upgrade", label: `Upgrade to ${nm(n.item)}` }];
       if (c) return [...(c.skill.id === FARMING ? plotAsk(c.skill, c.a.a) : []), { ...base, kind: "craft", skillId: c.skill.id, actionId: c.a.id, altIndex: 0, label: `${nm(c.skill)}: make ${nm(n.item)}` }];
       if (g) return { ...base, kind: "gather", skillId: g.skill.id, actionId: g.a.id, label: `${nm(g.skill)}: gather ${nm(n.item)}` };
       // a source can need steps first (the Bird Nests to open, say)
@@ -1346,6 +1380,27 @@ export function setup(ctx) {
     // waits for you to equip the right weapon).
     const popHtml = (o, rows, foot) => step(`<div class="aq-title">${icon(o)}<b>${esc(nm(o))}</b></div>${rows}`) + note(foot);
     const ASKS = {
+      upgrade: {
+        icon: (e) => itemById(e.itemId),
+        target: (e) => { const it = itemById(e.itemId), u = upgradeOf(it); return u && { it, u, n: () => Math.max(0, Math.ceil((e.qty - owned(it)) / (u.upgradedQuantity ?? 1))) }; },
+        done: (e, t) => (t.n() <= 0 ? "You have enough" : null),
+        // skipping turns it into a step you do yourself, like a skipped purchase
+        skip: (e, t) => { Object.assign(e, { kind: "manual", label: `Get ${nm(t.it)}`, note: MANUAL_NOTE }); delete e.what; delete e.answer; return true; },
+        cannot: (e, t) => (game.bank.getMaxUpgradeQuantity(t.u) >= t.n() ? null : `you can't pay for the upgrade right now (${costText(upgradeCost(t.u, t.n()))})`),
+        // an upgrade that only uses items (no GP) just happens
+        auto: (e) => { const u = upgradeOf(itemById(e.itemId)); return !!u && !(u.currencyCosts ?? []).length; },
+        act: (e, t) => {
+          const n = t.n(), before = owned(t.it), cost = costText(upgradeCost(t.u, n));
+          game.bank.upgradeItemOnClick(t.u, n);
+          return owned(t.it) > before ? `Upgraded ${num(owned(t.it) - before)} for ${cost}` : { block: `the game didn't upgrade it (is your bank full?)` };
+        },
+        turn: (e, t) => `confirm upgrading to ${nm(t.it)}, or skip it.`,
+        pop: (e, t) => {
+          const n = t.n();
+          return { title: "Upgrade an item?", yes: "Upgrade", html: popHtml(t.it, chips(chip(`Make ${num(n * (t.u.upgradedQuantity ?? 1))}`), chip(`You have ${num(owned(t.it))}`)) +
+            chips(chip("<b>Costs</b>", "lbl"), chip(esc(costText(upgradeCost(t.u, n))))), "Upgrading uses up what it costs. Skip turns this into a step you do yourself.") };
+        },
+      },
       travel: {
         icon: () => skillById(CARTO),
         target: (e) => hexOf(e),
@@ -1910,7 +1965,7 @@ export function setup(ctx) {
     const API = {
       version: VERSION, settings: Settings, mastery,
       skills: { list: trainSkills, byId: skillById, isTrainable, methodsOf, methodById, makeables, stepFor, xpRate, levelCap, xpAt, levelIn, COMBAT, WEAPON },
-      items: { crafter, gatherer, shopOnly, buyLeft, potionGap, index: () => index() },
+      items: { crafter, gatherer, shopOnly, buyLeft, potionGap, upgradeOf, upgradeCost, upgrades: () => upgradeList().map(upgradeMethod), UPGRADE, index: () => index() },
       plan: { buildRows, rowsFor, toEntries, materialSteps, makeTime, acquire, itemMissing, missingHtml, itemSection, rowsMs, trainCands, trainPlan, bestDetour, blockedWhy, goalFirst, agilityPicks, buildSteps, nextBatch },
       fightId, HITPOINTS,
       // other mods can say where an item comes from (monster drops, gems): fn(item, qty) returns a step, or nothing
@@ -2093,6 +2148,8 @@ export function setup(ctx) {
       if (Array.isArray(drops)) for (const d of drops) if (d?.item) push(idx.droppers, d.item.id, m);
       if (m.bones?.item) push(idx.droppers, m.bones.item.id, m);
     }
+    // bank upgrades ((G) Adamant Shield from (S) Adamant Shield, Gold Bars and GP), for items nothing else gives
+    try { for (const m of st()?.items.upgrades?.() ?? []) { const id = m.product.id; if (!idx.crafters.has(id) && !idx.gatherers.has(id) && !idx.shop.has(id)) push(idx.crafters, id, { skill: m.skill, a: m }); } } catch (e) { /* no upgrades */ }
     // spells that turn runes (and an item) into something, like Holy Invocation making Enchanted Urns. Only for things
     // nothing else gives, so Bones still come from monsters and not from Bone Offering.
     const has = (id) => idx.crafters.has(id) || idx.gatherers.has(id) || idx.randoms.has(id) || idx.droppers.has(id);
@@ -2541,11 +2598,20 @@ export function setup(ctx) {
         const { c, opt, crafts } = n.recipe;
         const uses = [...baseCosts(c.a), ...opt.costs].filter((x) => x?.item).map((x) => chip(`${icon(x.item)}${num(x.quantity * crafts)} ${esc(nm(x.item))}`));
         const alts = (idx.crafters.get(n.item.id)?.length ?? 1) - 1 + options(c.a).length - 1;
+        if (c.skill.id === st()?.items.UPGRADE) {
+          const cost = st().items.upgradeCost(c.a.upgrade, crafts), short = cost.cur.filter((k) => (k.currency.amount ?? 0) < k.quantity);
+          title = `${icon(n.item)}<b>Upgrade to ${esc(nm(n.item))}</b> &times;${num(n.qty)}`;
+          chips = `<div class="mbd-chips">${chip(`${num(crafts)} upgrade${crafts === 1 ? "" : "s"}`)}${haveChip}${chip("In the bank, asks you first", "ok")}</div>` +
+            (uses.length ? `<div class="mbd-chips">${chip("<b>Uses</b>", "lbl")}${uses.join("")}</div>` : "") +
+            (cost.cur.length ? `<div class="mbd-chips">${chip("<b>Costs</b>", "lbl")}${cost.cur.map((k) => chip(`${num(k.quantity)} ${esc(nm(k.currency))}`, short.includes(k) ? "warn" : "")).join("")}</div>` : "") +
+            (short.length ? `<div class="mbd-chips">${chip(`<i class="fa fa-exclamation-triangle"></i>&nbsp;You don't have enough ${esc(short.map((k) => nm(k.currency)).join(" or "))} yet`, "warn")}</div>` : "");
+        } else {
         title = `${icon(c.skill)}<b>${esc(nm(c.skill))}</b>: make ${icon(n.item)}<b>${esc(nm(n.item))}</b> &times;${num(n.qty)}`;
         chips =
           `<div class="mbd-chips">${chip(`Level ${c.a.level ?? 1}`)}${chip(`${num(crafts)} craft${crafts === 1 ? "" : "s"}`)}${haveChip}${alts > 0 ? chip(`${alts} other option${alts === 1 ? "" : "s"}`) : ""}</div>` +
           (uses.length ? `<div class="mbd-chips">${chip("<b>Uses</b>", "lbl")}${uses.join("")}</div>` : "") +
           (lvlChip(c.skill, c.a) ? `<div class="mbd-chips">${lvlChip(c.skill, c.a)}</div>` : "");
+        }
       } else {
         title = `${icon(n.item)}<b>${esc(nm(n.item))}</b> &times;${num(n.qty)}`;
         chips = `<div class="mbd-chips">${haveChip}</div>` + (isAstroItem(n.item) ? astroHtml(n.item, n.qty) : isFarmItem(n.item) ? farmHtml(n.item, n.qty) + buyHtml(n.item.id, n.qty) : sourceHtml(n.item.id) + buyHtml(n.item.id, n.qty) + lvlWarn(n.item.id));
@@ -2557,14 +2623,16 @@ export function setup(ctx) {
   // Queue entries: "kind" is what the runner does; qty is how many MORE of the item to end up with
   // (for "manual" entries it is how many you should own).
   const toEntries = (rows) =>
-    rows.map((n) => {
+    rows.flatMap((n) => {
       const base = { itemId: n.item.id, qty: n.qty };
       if (n.recipe) {
         const { c } = n.recipe;
+        if (c.skill.id === st()?.items.UPGRADE) return { ...base, qty: (have(n.item) ?? 0) + n.qty, kind: "ask", what: "upgrade", label: `Upgrade to ${nm(n.item)}` };
         return { ...base, kind: "craft", skillId: c.skill.id, actionId: c.a.id, altIndex: 0, label: `${nm(c.skill)}: make ${nm(n.item)}` };
       }
       const g = idx.gatherers.get(n.item.id)?.[0];
-      if (!g) { const d = dropEntry(n.item, n.qty); if (d) return { ...base, ...d }; }
+      // a source can need steps first (the Bird Nests to open, say)
+      if (!g) { const d = dropEntry(n.item, n.qty); if (d) { const { before, ...rest } = d; return [...(before ?? []), { ...base, ...rest }]; } }
       if (g) return { ...base, kind: "gather", skillId: g.skill.id, actionId: g.a.id, label: `${nm(g.skill)}: gather ${nm(n.item)}` };
       const why = riskyFightNote(n.item, n.qty);
       return { ...base, qty: n.need ?? n.qty, kind: "manual", label: why ? `Fight ${why.name} for ${nm(n.item)}` : `Get ${nm(n.item)}`, note: why ? why.note : plain(sourceText(n.item.id)) };

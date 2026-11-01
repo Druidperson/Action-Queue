@@ -473,7 +473,8 @@
     if (pl.selectedEquipmentSet === mine) skip("the switch didn't happen (waiting for you to equip one)");
     A().runner.stop(); await sleep(300);
     eq(pl.selectedEquipmentSet, mine, "set after Stop");
-    A().runner.start(); await sleep(2500);
+    await waitFor(() => !game.combat.isActive && !game.activeAction, 3000); await sleep(800); // let the fight end before starting again
+    A().runner.start(); await waitFor(() => pl.selectedEquipmentSet !== mine, 5000);
     ok(pl.selectedEquipmentSet !== mine, "didn't switch again after Start");
     A().runner.stop(); await sleep(300);
     eq(pl.selectedEquipmentSet, mine, "set after the second Stop");
@@ -775,6 +776,69 @@
       if (/No source found/.test(D.itemSection(it, 1))) none.push(`${it.name} (${where})`);
     }
     eq(none.slice(0, 10).join("; "), "", `${none.length} with no source:`);
+  });
+
+  // =================================================================================================================
+  const UP = "Upgrades";
+  const roomy = async (fn) => { const b = game.bank, d = Object.getOwnPropertyDescriptor(b, "maximumSlots"), real = b.maximumSlots; Object.defineProperty(b, "maximumSlots", { get: () => real + 5, configurable: true }); try { await fn(); } finally { if (d) Object.defineProperty(b, "maximumSlots", d); else delete b.maximumSlots; } };
+  const sHelm = () => list(game.items).find((i) => i.name === "(S) Bronze Helmet");
+  test(UP, "(G) Adamant Shield plans through both upgrades, the same in both windows", () => {
+    const g = item("melvorD:Adamant_Shield_T_G"); if (!g) skip("no (G) Adamant Shield");
+    const a = S().plan.toEntries(S().plan.buildRows(g, 1, true)), b = T()._dev.toEntries(T()._dev.buildRows(g, 1));
+    const ups = a.filter((e) => e.what === "upgrade").map((e) => e.label);
+    eq(ups.join(" > "), "Upgrade to (S) Adamant Shield > Upgrade to (G) Adamant Shield");
+    eq(a[a.length - 1].what, "upgrade", "last step"); ok(a.some((e) => e.itemId === "melvorD:Gold_Bar"), "no Gold Bars");
+    eq(b.map((e) => e.label).join("|"), a.map((e) => e.label).join("|"), "the Township window plans it differently:");
+    ok(!/No source found/.test(T()._dev.itemSection(g, 1)), "the window says no source");
+  });
+  test(UP, "upgrades never replace a skill, the shop or a drop that already gives the item", () => {
+    const bad = [];
+    for (const [id, cs] of S().items.index().crafters) {
+      if (cs[0].skill.id !== S().items.UPGRADE) continue;
+      const it = item(id);
+      if (S().skills.list().some((sk) => S().skills.methodsOf(sk).some((m) => m.product === it))) bad.push(`${it.name} (skill)`);
+      if (A().shop.for(it)) bad.push(`${it.name} (shop)`);
+    }
+    eq(bad.slice(0, 6).join(", "), "");
+    ok(!T()._dev.buildRows(item("melvorD:Bones"), 1).find((r) => r.item.id === "melvorD:Bones")?.recipe, "Bones");
+  });
+  test(UP, "an upgrade asks first, and Skip spends nothing", () => sandbox(async () => {
+    const s = sHelm(); if (!s) skip("no (S) Bronze Helmet");
+    give("melvorD:Bronze_Helmet", 1); give("melvorD:Silver_Bar", 10);
+    const gp = game.gp.amount, n = have(s);
+    add([{ itemId: s.id, qty: n + 1, kind: "ask", what: "upgrade", label: "upgrade test" }]);
+    A().runner.start(); await waitFor(() => /Upgrade an item/.test(swalTitle()), 4000, 100); await sleep(500);
+    has(SwalLocale.getPopup().textContent, "5,000 GP");
+    swalButton(".swal2-cancel").click(); await sleep(800);
+    eq(items()[0].kind, "manual", "skip should make it a step you do yourself"); eq(game.gp.amount, gp, "GP"); eq(have(s), n, "upgraded anyway");
+  }));
+  test(UP, "Upgrade spends the cost and gives the item", () => sandbox(() => roomy(async () => {
+    const s = sHelm(); if (!s) skip("no (S) Bronze Helmet");
+    give("melvorD:Bronze_Helmet", 1); give("melvorD:Silver_Bar", 10);
+    const gp = game.gp.amount, n = have(s);
+    bankUndo.push(() => { const q = have(s) - n; if (q > 0) game.bank.removeItemQuantity(s, q, false); });
+    add([{ itemId: s.id, qty: n + 1, kind: "ask", what: "upgrade", label: "upgrade test" }]);
+    A().runner.start(); await waitFor(() => /Upgrade an item/.test(swalTitle()), 4000, 100); await sleep(500);
+    swalButton(".swal2-confirm").click(); await waitFor(() => items()[0].status === "done", 4000);
+    eq(items()[0].status, "done", items()[0].reason ?? R().message); eq(have(s), n + 1, "item"); eq(gp - game.gp.amount, 5000, "GP spent");
+  })));
+  test(UP, "an upgrade with no room in the bank stops and says so", () => sandbox(async () => {
+    const s = sHelm(); if (!s) skip("no (S) Bronze Helmet");
+    give("melvorD:Bronze_Helmet", 1); give("melvorD:Silver_Bar", 10);
+    const b = game.bank, d = Object.getOwnPropertyDescriptor(b, "maximumSlots"), used = b.occupiedSlots ?? b.items.size, gp = game.gp.amount;
+    Object.defineProperty(b, "maximumSlots", { get: () => used, configurable: true });
+    try {
+      add([{ itemId: s.id, qty: have(s) + 1, kind: "ask", what: "upgrade", label: "upgrade test", answer: "yes" }]);
+      A().runner.start(); await sleep(600);
+    } finally { if (d) Object.defineProperty(b, "maximumSlots", d); else delete b.maximumSlots; }
+    if (have(s)) return; // you already had one, so it stacked
+    eq(items()[0].status, "blocked"); has(items()[0].reason, "bank full"); eq(game.gp.amount, gp, "GP");
+  }));
+  test(UP, "Township steps for things you open include getting them first", () => {
+    const D = T()._dev, it = list(game.items).find((x) => !S().items.crafter(x.id) && !S().items.gatherer(x.id) && !S().items.shopOnly(x) && D.dropEntry(x, 1)?.what === "open");
+    if (!it) skip("nothing here comes only from something you can open");
+    const es = D.toEntries(D.buildRows(it, have(it) + 1));
+    ok(es.every((e) => !("before" in e)), "a step still carries its first steps inside it"); ok(es.length >= 2, "the container step is missing");
   });
 
   // =================================================================================================================
