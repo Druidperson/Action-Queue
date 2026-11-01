@@ -389,6 +389,34 @@
     const goal = items().find((e) => e.kind === "train" && e.skillId === "melvorD:Woodcutting"); ok(goal, "no goal was added");
     has(goal.label, "Woodcutting: reach level");
   }));
+  const stubSmith = async (over, fn) => {
+    const sm = game.smithing, saved = Object.fromEntries(Object.keys(over).map((k) => [k, Object.getOwnPropertyDescriptor(sm, k)]));
+    try { for (const [k, f] of Object.entries(over)) sm[k] = f(sm[k].bind(sm)); S()._dev.secMemo.m.clear(); await fn(sm); }
+    finally { for (const [k, d] of Object.entries(saved)) { if (d) Object.defineProperty(sm, k, d); else delete sm[k]; } S()._dev.secMemo.m.clear(); }
+  };
+  const ironBars = (rows) => rows.find((r) => r.item.id === "melvorD:Iron_Bar")?.qty ?? 0;
+  test(TR, "the chance to keep materials means fewer bars get planned, in both windows", () => stubSmith({ getPreservationChance: (o) => (a) => (a?.product?.id === "melvorD:Iron_Platebody" ? 20 : o(a)) }, () => {
+    const plate = item("melvorD:Iron_Platebody");
+    eq(ironBars(S().plan.buildRows(plate, 1000, true)), 4000, "training planner:");
+    eq(ironBars(T()._dev.buildRows(plate, 1000)), 4000, "Township planner:");
+  }));
+  test(TR, "the chance to make double means fewer crafts", () => stubSmith({ getDoublingChance: (o) => (a) => (a?.product?.id === "melvorD:Iron_Platebody" ? 100 : o(a)) }, () => {
+    const plate = item("melvorD:Iron_Platebody");
+    eq(ironBars(S().plan.buildRows(plate, 1000, true)), 2500, "bars for 1,000 with every craft doubled:");
+  }));
+  test(TR, "XP bonuses count when working out how many crafts a level takes", () => stubSmith({ modifyXP: (o) => (x, a) => o(x, a) * 2 }, () => {
+    const m = S().skills.methodsOf(game.smithing).find((x) => x.product?.id === "melvorD:Iron_Platebody");
+    eq(Math.round(m.xp), Math.round(m.a.baseExperience * 2), "XP per craft:");
+  }));
+  test(TR, "a level goal plans about an hour of work at a time", () => {
+    const sm = game.smithing, L = Math.min(99, sm.level + 30);
+    const r = S()._dev.Trainer.plan({ id: "g", kind: "train", skillId: sm.id, targetLevel: L, targetXp: S().skills.xpAt(L), qty: S().skills.xpAt(L) });
+    if (!r.ok) skip(r.reason);
+    const last = r.entries[r.entries.length - 1], m = S().skills.methodById(sm, last.actionId), c = S().plan.trainCands(sm).find((x) => x.a === m);
+    ok(c, "the batch's method isn't a candidate");
+    const crafts = Math.ceil(last.qty / S().plan.trainCands(sm).find((x) => x.a === m).per);
+    ok(crafts * c.ms <= 3600000 * 1.05, `batch is ${Math.round(crafts * c.ms / 60000)} min`);
+  });
   test(TR, "the skill picker shows icons, splits combat from non-combat, and picking a skill works", () => sandbox(async () => {
     await openTrain();
     const pop = SwalLocale.getPopup();
@@ -686,7 +714,7 @@
     liveOk();
     // Just Learning needs runes and something to cast on: put some in the bank first
     for (const [id, n] of [["melvorF:Nature_Rune", 20], ["melvorD:Air_Rune", 20], ["melvorD:Fire_Rune", 40], ["melvorD:Iron_Arrowtips", 10]]) if (item(id)) give(id, n);
-    S()._dev.secMemo.m.clear();
+    S()._dev.secMemo.m.clear(); await sleep(1100); // let anything a test before this cached roll over
     const mg = skill("Magic"), c = S().plan.trainPlan(mg, mg.level + 1, null).batches[0]?.c;
     if (!c || !c.opt?.costs?.length) skip("no Alt Magic method at this level");
     for (const k of c.opt.costs) give(k.item.id, k.quantity * 10);

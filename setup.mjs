@@ -5,7 +5,7 @@
 //   3. Township tasks: the green play buttons on Township tasks, which plan a task and add its steps
 // The parts talk through `parts` below. Other mods still reach the queue as mod.api.actionQueue (or window.actionQueue).
 export function setup(ctx) {
-  const VERSION = "2.6.1";
+  const VERSION = "2.7.0";
   const parts = { aq: null, st: null, installed: false };
 
   // ======================================================================================================================
@@ -773,11 +773,21 @@ export function setup(ctx) {
     const hitSafety = (maxHit, realm) => takeSafety(Math.floor((Number(maxHit) || 0) * NM() * (1 - (!realm || realm.id === MELVOR ? resistance() : 0) / 100)));
     // A method is one way to train: what an attempt costs (options, the first is used), what it makes (product, qty), how long it
     // takes (ms), the XP it gives, the share of attempts that work (succ) and how to start it. Most come straight from an action.
+    // What the game really gives you, read fresh once a second since mastery and bonuses change as you train: XP with
+    // your XP bonuses, the time per action with your speed bonuses, the chance an action keeps its materials
+    // (preservation) and the chance it makes double. Plans used to assume none of these and bought too much.
+    const live = (k, skill, a, fn, base) => perSec(`${k}|${skill.id}|${a.id}`, () => { try { const v = Number(fn()); return isFinite(v) && v >= 0 ? v : base; } catch (e) { return base; } });
+    const realXp = (skill, a) => { const b = a.baseExperience ?? 0; return live("xp", skill, a, () => (skill.modifyXP ? skill.modifyXP(b, a) : b), b); };
+    const realMs = (skill, a) => { const b = intervalMs(skill, a); return live("ms", skill, a, () => (skill.modifyInterval ? skill.modifyInterval(b, a) || b : b), b); };
+    const keepChance = (skill, a) => Math.min(0.8, live("keep", skill, a, () => (skill.getPreservationChance ? skill.getPreservationChance(a) / 100 : 0), 0));
+    const dblChance = (skill, a) => Math.min(1, live("dbl", skill, a, () => (skill.getDoublingChance ? skill.getDoublingChance(a) / 100 : 0), 0));
+    // the share of a craft's materials it really uses up, on average
+    const useOf = (m) => (typeof m?.use === "number" ? m.use : 1);
     const method = (skill, a, over = {}) => Object.defineProperties({
-      id: a.id, skill, a, name: nm(a), xp: a.baseExperience ?? 0,
+      id: a.id, skill, a, name: nm(a), get xp() { return realXp(skill, a); }, get use() { return 1 - keepChance(skill, a); }, get dbl() { return dblChance(skill, a); },
       get level() { return lvl(a); }, get media() { return a.media ?? this.product?.media; }, get product() { return a.product ?? null; }, get qty() { return a.baseQuantity ?? 1; },
       get options() { return (a.alternativeCosts?.length ? a.alternativeCosts.map((o) => ({ costs: o.itemCosts ?? [], mult: o.quantityMultiplier ?? 1 })) : NO_COSTS).map((o) => ({ costs: [...baseCosts(a), ...o.costs].filter((k) => k?.item), mult: o.mult })); },
-      get succ() { return succ(skill, a); }, get ms() { return intervalMs(skill, a); },
+      get succ() { return succ(skill, a); }, get ms() { return realMs(skill, a); },
       start: (e) => (STARTERS[skill.id] ?? startCraft)(skill, a, e),
     }, Object.getOwnPropertyDescriptors(over));
     const nonShardQty = (skill, a, item) => {
@@ -1240,7 +1250,7 @@ export function setup(ctx) {
       return methodCache.get(skill.id);
     };
     const methodById = (skill, id) => methodsOf(skill).find((m) => m.id === id);
-    const perAttempt = (m, opt = m.options[0]) => Math.max(1, m.qty * opt.mult) * m.succ;
+    const perAttempt = (m, opt = m.options[0]) => Math.max(1, m.qty * opt.mult) * m.succ * (1 + (m.dbl ?? 0));
     const xpRate = (m) => (m.ms > 0 ? ((m.xp * m.succ) / m.ms) * 3600000 : 0);
     // where each item comes from. Magic only makes what no other skill makes, so bars still come from Smithing.
     let idx = null;
@@ -1317,7 +1327,7 @@ export function setup(ctx) {
         if (n.recipe) {
           const { c, opt } = n.recipe;
           n.recipe.crafts = Math.ceil(n.qty / perAttempt(c.a, opt));
-          if (n.qty > 0) for (const k of opt.costs) demand.set(k.item.id, (demand.get(k.item.id) ?? 0) + k.quantity * n.recipe.crafts);
+          if (n.qty > 0) for (const k of opt.costs) demand.set(k.item.id, (demand.get(k.item.id) ?? 0) + Math.ceil(k.quantity * n.recipe.crafts * useOf(c.a)));
         }
         if (n.qty > 0) rows.push(n);
       }
@@ -1401,8 +1411,8 @@ export function setup(ctx) {
       return { ...base, qty: n.need ?? n.qty, kind: "manual", label: `Get ${nm(n.item)}`, note: MANUAL_NOTE };
     });
     // the steps that get the missing materials for `crafts` more attempts; null if the queue can't get one of them
-    const materialSteps = (costs, crafts, parent) => {
-      const targets = costs.map((k) => [k.item, k.quantity * crafts - owned(k.item)]).filter(([, n]) => n > 0);
+    const materialSteps = (costs, crafts, parent, use = 1) => {
+      const targets = costs.map((k) => [k.item, Math.ceil(k.quantity * crafts * use) - owned(k.item)]).filter(([, n]) => n > 0);
       const entries = targets.length ? toEntries(rowsFor(targets, true)) : [];
       if (entries.some((x) => x.kind === "manual")) return null;
       for (const x of entries) x.parent = parent;
@@ -1606,7 +1616,7 @@ export function setup(ctx) {
       if (!m || (e.kind !== "skill" && !item)) return fail("this action wasn't found in your game version");
       const opt = m.options[e.altIndex ?? 0] ?? m.options[0], remaining = e.qty - A.runner.gained(e);
       const crafts = Math.max(1, Math.ceil(remaining / (e.kind === "skill" ? Math.max(1e-9, m.xp * m.succ) : e.yieldPer > 0 ? e.yieldPer : perAttempt(m, opt))));
-      const entries = materialSteps(opt.costs, crafts, e.parent ?? e.id);
+      const entries = materialSteps(opt.costs, crafts, e.parent ?? e.id, useOf(m));
       if (!entries) return fail(`${name} needs something the queue can't get on its own`);
       return entries.length ? { ok: true, entries, remaining, crafts, name } : fail("not enough materials (or level too low)");
     };
@@ -1633,11 +1643,11 @@ export function setup(ctx) {
       // average time per item
       if (!x) { if (buyLeft(item) >= n) return { ms: 0, xp: 0 }; const u = dropMs(item); return u > 0 ? { ms: u * n, xp: 0 } : NO; }
       if (depth > 10 || seen.has(item.id) || !x || x.a.level > levelIn(x.skill, lv) || x.a.need?.(lv) || (c && potionGap(item))) return NO;
-      if (g) { const acts = n / Math.max(1, g.a.qty); return { ms: acts * g.a.ms, xp: g.skill.id === skillId ? acts * g.a.xp : 0 }; }
+      if (g) { const acts = n / (Math.max(1, g.a.qty) * (1 + (g.a.dbl ?? 0))); return { ms: acts * g.a.ms, xp: g.skill.id === skillId ? acts * g.a.xp : 0 }; }
       const opt = c.a.options[0], crafts = n / perAttempt(c.a, opt); // attempts, not rounded: ranks methods by their steady rate
       const r = { ms: crafts * c.a.ms, xp: c.skill.id === skillId ? crafts * c.a.succ * c.a.xp : 0 };
       seen.add(item.id);
-      for (const k of opt.costs) { const s = acquire(k.item, k.quantity * crafts, lv, skillId, seen, depth + 1); r.ms += s.ms; r.xp += s.xp; }
+      for (const k of opt.costs) { const s = acquire(k.item, k.quantity * crafts * useOf(c.a), lv, skillId, seen, depth + 1); r.ms += s.ms; r.xp += s.xp; }
       seen.delete(item.id);
       return r;
     };
@@ -1660,7 +1670,7 @@ export function setup(ctx) {
         if (!st) continue;
         const opt = st.craft ? m.options[0] : NO_COSTS[0];
         let ms = m.ms, xpPer = m.xp * m.succ, mast = 0;
-        if (st.craft) for (const k of opt.costs) { const r = acquire(k.item, k.quantity, lv, skill.id); ms += r.ms; xpPer += r.xp; }
+        if (st.craft) for (const k of opt.costs) { const r = acquire(k.item, k.quantity * useOf(m), lv, skill.id); ms += r.ms; xpPer += r.xp; }
         if (!isFinite(ms) || ms <= 0) continue;
         if (mastery() && !m.noMastery && m.a.hasMastery !== false) {
           try { if (skill.getMasteryLevel(m.a) < 99) mast = Number(skill.getMasteryXPToAddForAction(m.a, m.ms)) || 0; } catch (e) { /* no mastery */ }
@@ -1736,6 +1746,7 @@ export function setup(ctx) {
         return best;
       });
     };
+    const BATCH_MS = 3600000;
     // the next batch of real queue steps for a "train" entry, planned from the player's level and bank right now
     const nextBatch = (e) => {
       const skill = skillById(e.skillId);
@@ -1784,10 +1795,13 @@ export function setup(ctx) {
           : `nothing at ${nm(skill)} level ${skill.level} can be trained by the queue on its own (it may need shop items or monster drops)`);
       }
       const m = b.c.a, goalXp = Math.min(xpAt(b.to), e.targetXp ?? Infinity), note = `${m.name} until level ${b.to} (about ${num(Math.round(b.c.rate))} XP/h)`;
-      const actions = Math.max(1, Math.min(stockCap(b.c.opt.costs), m.cap?.() ?? Infinity, Math.ceil((goalXp - (skill.xp ?? 0)) / b.c.xpPer)));
+      // at most about an hour of work per batch: mastery (and with it the chance to keep materials) grows as you go, so
+      // the next batch is planned with the new numbers and uses up anything left over instead of buying it all up front
+      const hour = Math.max(1, Math.floor(BATCH_MS / Math.max(1, b.c.ms)));
+      const actions = Math.max(1, Math.min(stockCap(b.c.opt.costs), m.cap?.() ?? Infinity, hour, Math.ceil((goalXp - (skill.xp ?? 0)) / b.c.xpPer)));
       // a method that makes nothing (or isn't the usual way to make its product) runs as an XP step after its materials
       if (b.c.st.own) {
-        const entries = materialSteps(b.c.opt.costs, actions, e.id), xpPer = m.xp * m.succ;
+        const entries = materialSteps(b.c.opt.costs, actions, e.id, useOf(m)), xpPer = m.xp * m.succ;
         if (!entries) return fail(`${m.name} needs something the queue can't get on its own`);
         const last = { kind: "skill", skillId: skill.id, actionId: m.id, qty: Math.ceil(actions * xpPer), untilLevel: b.to, untilSkill: skill.id, parent: e.id, label: `${nm(skill)}: ${m.name}` };
         if (e.targetXp !== undefined && e.targetXp <= xpAt(b.to)) last.untilXp = e.targetXp;
@@ -2042,7 +2056,7 @@ export function setup(ctx) {
       version: VERSION, settings: Settings, mastery,
       skills: { list: trainSkills, byId: skillById, isTrainable, methodsOf, methodById, makeables, stepFor, xpRate, levelCap, xpAt, levelIn, COMBAT, WEAPON },
       prayers: { options: prayerOptions, auto: autoPrayer, usable: usablePrayers, last: lastPrayer, remember: rememberPrayer, forEntry: fightPrayer },
-      items: { crafter, gatherer, shopOnly, buyLeft, potionGap, upgradeOf, upgradeCost, upgrades: () => upgradeList().map(upgradeMethod), UPGRADE, index: () => index() },
+      items: { keepChance, dblChance, crafter, gatherer, shopOnly, buyLeft, potionGap, upgradeOf, upgradeCost, upgrades: () => upgradeList().map(upgradeMethod), UPGRADE, index: () => index() },
       plan: { buildRows, rowsFor, toEntries, materialSteps, makeTime, acquire, itemMissing, missingHtml, itemSection, rowsMs, trainCands, trainPlan, bestDetour, blockedWhy, goalFirst, agilityPicks, buildSteps, nextBatch },
       fightId, HITPOINTS,
       // other mods can say where an item comes from (monster drops, gems): fn(item, qty) returns a step, or nothing
@@ -2275,13 +2289,15 @@ export function setup(ctx) {
     nodes.set(item.id, n);
     const c = idx.crafters.get(item.id)?.[0];
     if (!c || path.has(item.id) || depth > 12) return;
-    const opt = options(c.a)[0];
-    const per = Math.max(1, (c.a.baseQuantity ?? 1) * opt.mult) * succ(c.skill, c.a);
+    const opt = options(c.a)[0], I = st()?.items, isSkill = c.skill?.id !== I?.UPGRADE;
+    // the game's real chances to make double and to keep the materials, same as the training planner
+    const dbl = isSkill && I?.dblChance ? I.dblChance(c.skill, c.a) : 0, use = isSkill && I?.keepChance ? 1 - I.keepChance(c.skill, c.a) : 1;
+    const per = Math.max(1, (c.a.baseQuantity ?? 1) * opt.mult) * succ(c.skill, c.a) * (1 + dbl);
     const crafts = Math.ceil(qty / per);
-    n.recipe = { c, opt, crafts };
+    n.recipe = { c, opt, crafts, use };
     path.add(item.id);
     for (const cost of [...baseCosts(c.a), ...opt.costs]) {
-      if (cost?.item) explode(cost.item, cost.quantity * crafts, depth + 1, path, nodes);
+      if (cost?.item) explode(cost.item, Math.ceil(cost.quantity * crafts * use), depth + 1, path, nodes);
     }
     path.delete(item.id);
   };
@@ -2650,12 +2666,14 @@ export function setup(ctx) {
       n.qty = make;
       if (n.recipe) {
         const { c, opt } = n.recipe;
-        const per = Math.max(1, (c.a.baseQuantity ?? 1) * opt.mult) * succ(c.skill, c.a);
+        const I = st()?.items, isSkill = c.skill?.id !== I?.UPGRADE;
+        const dbl = isSkill && I?.dblChance ? I.dblChance(c.skill, c.a) : 0, use = isSkill && I?.keepChance ? 1 - I.keepChance(c.skill, c.a) : 1;
+        const per = Math.max(1, (c.a.baseQuantity ?? 1) * opt.mult) * succ(c.skill, c.a) * (1 + dbl);
         const crafts = Math.ceil(make / per);
-        n.recipe = { c, opt, crafts };
+        n.recipe = { c, opt, crafts, use };
         if (make > 0) {
           for (const cost of [...baseCosts(c.a), ...opt.costs]) {
-            if (cost?.item) demand.set(cost.item.id, (demand.get(cost.item.id) ?? 0) + cost.quantity * crafts);
+            if (cost?.item) demand.set(cost.item.id, (demand.get(cost.item.id) ?? 0) + Math.ceil(cost.quantity * crafts * use));
           }
         }
       }

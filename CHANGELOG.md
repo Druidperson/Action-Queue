@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.7.0
+- Plans use the game's real numbers now instead of the base ones: your XP bonuses, your speed bonuses, the chance to keep the materials (it grows with mastery) and the chance to make double. Before, a long Smithing goal could end with thousands of bars left over, because every craft that kept its bars was still counted as using them.
+- Level goals plan about an hour of work at a time instead of the whole climb at once. Your mastery keeps growing while you train, so each new batch uses the new numbers and uses up anything left from the last one first.
+- Time estimates are closer too, since they count your speed bonuses.
+
 ## 2.6.1
 - The skill list in the Train window shows each skill's icon, and splits combat skills from non-combat ones. The selected skill shows its icon too.
 
