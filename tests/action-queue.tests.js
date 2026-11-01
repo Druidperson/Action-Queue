@@ -578,6 +578,72 @@
     ok(A().runner.state === "running", `stopped: ${R().message}`);
   }), { live: true });
 
+  const FP = "Fight prayers";
+  const keepChoice = async (fn) => { const k = "aq-fight-prayer", was = localStorage.getItem(k); try { await fn(); } finally { if (was === null) localStorage.removeItem(k); else localStorage.setItem(k, was); } };
+  test(FP, "the Train window offers a prayer for combat skills only", () => sandbox(() => keepChoice(async () => {
+    if (!S().prayers.usable().length) skip("no prayer at your level");
+    await openTrain();
+    const pick = async (id) => { const s = $("mst-tr-skill"); s.value = id; s.dispatchEvent(new Event("change", { bubbles: true })); await sleep(80); return !!$("mst-tr-prayer"); };
+    eq(await pick("melvorD:Defence"), true, "Defence:"); eq(await pick("melvorD:Attack"), true, "Attack:");
+    eq(await pick("melvorD:Woodcutting"), false, "Woodcutting:"); eq(await pick("melvorD:Prayer"), false, "Prayer:");
+    eq([...$("mst-tr-skill").options].length > 0, true);
+  })));
+  test(FP, "a combat goal keeps the prayer, the fights it plans get it, and the choice is remembered", () => sandbox(() => keepChoice(async () => {
+    if (!S().prayers.usable().length) skip("no prayer at your level");
+    localStorage.removeItem("aq-fight-prayer");
+    await openTrain();
+    const s = $("mst-tr-skill"); s.value = "melvorD:Defence"; s.dispatchEvent(new Event("change", { bubbles: true })); await sleep(80);
+    eq($("mst-tr-prayer").value, "", "off by default");
+    const p = $("mst-tr-prayer"); p.value = "auto"; p.dispatchEvent(new Event("change", { bubbles: true })); await sleep(50);
+    swalButton(".swal2-deny").click(); await waitFor(() => items().some((e) => e.kind === "train"), 4000, 100);
+    const goal = items().find((e) => e.kind === "train"); eq(goal?.prayer, "auto"); has(goal.label, "with prayer");
+    eq(localStorage.getItem("aq-fight-prayer"), "auto", "remembered:");
+    const r = S()._dev.Trainer.plan(goal); ok(r.ok, r.reason);
+    for (const x of r.entries.filter((x) => String(x.actionId).startsWith("fight:"))) eq(x.prayer, "auto", x.label);
+  })));
+  test(FP, "Automatic picks a prayer that fits the skill", () => {
+    const D = skill("Defence"), p = S().prayers.auto(D);
+    if (!p) skip("no defensive prayer at your level");
+    ok(/Evasion|Damage Reduction/i.test(p.stats.describePlain()), `${p.name} for Defence`);
+    const st = S().prayers.auto(skill("Strength")); if (st) ok(/Melee Maximum Hit/i.test(st.stats.describePlain()), `${st.name} for Strength`);
+  });
+  test(FP, "a fight with a prayer turns it on from bones the fight drops, and never stops for lack of points", () => sandbox(async () => {
+    const pl = game.combat.player, pts = pl.prayerPoints, bones = item("melvorD:Bones"), loot = game.combat.loot, pr = S().prayers.usable()[0];
+    if (!pr) skip("no prayer at your level");
+    for (const it of list(game.items)) if (it.prayerPoints > 0 && have(it)) take(it.id);
+    const m = S().skills.methodById(skill("Defence"), S().fightId(game.monsters.getObjectByID("melvorD:Chicken")));
+    const e = { kind: "skill", skillId: "melvorD:Defence", actionId: m.id, prayer: pr.id };
+    try {
+      pl.prayerPoints = 0;
+      eq(m.check(e), null, "no points and no bones:");
+      loot.add(bones, 5, true); m.check(e);
+      ok(pl.prayerPoints > 0, "didn't bury"); ok(pl.activePrayers.has(pr), "prayer isn't on");
+    } finally { if (pl.activePrayers.has(pr)) pl.togglePrayer(pr); pl.prayerPoints = pts; const q = have(bones); if (q) game.bank.removeItemQuantity(bones, q, false); }
+  }));
+  test(FP, "with the prayer off, a fight leaves prayers alone", () => sandbox(async () => {
+    const pl = game.combat.player, pts = pl.prayerPoints;
+    const m = S().skills.methodById(skill("Defence"), S().fightId(game.monsters.getObjectByID("melvorD:Chicken")));
+    try { pl.prayerPoints = 50; m.check({ kind: "skill", skillId: "melvorD:Defence", actionId: m.id }); eq(pl.activePrayers.size, 0, "a prayer got turned on"); }
+    finally { pl.prayerPoints = pts; }
+  }));
+  test(FP, "a Township monster task opens with your last prayer and adds it to the fight", () => sandbox(() => keepChoice(async () => {
+    const pr = S().prayers.usable()[0]; if (!pr) skip("no prayer at your level");
+    const goal = list(game.township.tasks.tasks).flatMap((t) => t.goals?.allGoals ?? []).find((g) => g.constructor.name === "TownshipMonsterGoal" && g.monster && !T()._dev.areaMissing(g.monster).length);
+    if (!goal) skip("no monster task you can do");
+    localStorage.setItem("aq-fight-prayer", pr.id);
+    await closeSwal();
+    const el = document.createElement("township-task-goal"); document.body.appendChild(el);
+    try {
+      el.setGoal(goal); el.querySelector(".mbd-th-btn").click();
+      await waitFor(() => SwalLocale.getPopup()?.querySelector("[data-mbd-prayer]"), 4000, 100); await sleep(400);
+      eq(SwalLocale.getPopup().querySelector("[data-mbd-prayer]").value, pr.id, "preselected:");
+      const add = [...SwalLocale.getPopup().querySelectorAll(".swal2-actions button")].find((b) => b.offsetParent && /Add to queue/.test(b.textContent));
+      if (!add || add.disabled) skip("this fight can't be added right now");
+      add.click(); await waitFor(() => items().length, 3000, 100);
+      eq(items().find((x) => x.kind === "kill")?.prayer, pr.id, "kill step prayer:");
+    } finally { el.remove(); }
+  })));
+
   // =================================================================================================================
   const MX = "More skills";
   test(MX, "Farming waits for crops, works on the next step meanwhile, then harvests", () => sandbox(async () => {

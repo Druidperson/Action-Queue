@@ -62,6 +62,8 @@ Combat skills train by fighting, with the gear you have on. The queue picks the 
 - Slayer fights in Slayer areas you can enter, or on your Slayer task. With no task, it asks before rolling one and tells you how many of that tier's monsters are safe for you.
 - If you start a fight yourself while the queue runs, it pauses and leaves your fight alone.
 
+You can also pick a prayer for any fight, in the Train window for combat skills or the Township window for monster tasks. Automatic picks the best one you have for what you're training (accuracy for Attack, max hit for Strength, evasion for Defence and Township fights). The queue keeps it going by burying the bones the fight drops, and if it runs out it keeps fighting without it until more drop. It's off by default and remembers your last pick.
+
 If you play while the queue runs and eat yourself, turn on "Fights don't need auto eat" in the mod settings. Fights then count as safe without auto eat, but it still won't fight anything that can hit for half your HP. For a single Township fight, use the checkbox in its window instead (see below).
 
 ## Township tasks

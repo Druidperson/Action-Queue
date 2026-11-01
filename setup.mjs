@@ -5,7 +5,7 @@
 //   3. Township tasks: the green play buttons on Township tasks, which plan a task and add its steps
 // The parts talk through `parts` below. Other mods still reach the queue as mod.api.actionQueue (or window.actionQueue).
 export function setup(ctx) {
-  const VERSION = "2.5.0";
+  const VERSION = "2.6.0";
   const parts = { aq: null, st: null, installed: false };
 
   // ======================================================================================================================
@@ -1041,6 +1041,26 @@ export function setup(ctx) {
     // Prayer points run out: the cheapest bones in your bank (by sale price per point) are buried for more
     const bones = () => perSec("bones", () => list(game.items).filter((it) => it.prayerPoints > 0 && owned(it) > 0 && !game.bank.items.get(it)?.locked)
       .sort((a, b) => (a.sellsFor?.quantity ?? 0) / a.prayerPoints - (b.sellsFor?.quantity ?? 0) / b.prayerPoints)[0] ?? null);
+    // ---------- a prayer for a fight ----------
+    // Any fight can use a prayer: one you pick, or "auto", the best one you have for the skill (more accuracy for Attack,
+    // a bigger max hit for Strength, more evasion for Defence and fights for Township tasks). Points are topped up from
+    // bones the same way as a Prayer goal; with none left the fight carries on without the prayer. The last choice is
+    // remembered for the next window.
+    const FIGHT_PRAYER = "aq-fight-prayer";
+    const prayerDesc = (p) => { try { return p.stats?.describePlain?.() ?? ""; } catch (e) { return ""; } };
+    const prayerCost = (p) => [p.pointsPerPlayer > 0 && `${p.pointsPerPlayer} per hit`, p.pointsPerEnemy > 0 && `${p.pointsPerEnemy} per enemy hit`, p.pointsPerRegen > 0 && `${p.pointsPerRegen} per heal`].filter(Boolean).join(", ");
+    const usablePrayers = () => list(game.prayers).filter((p) => !p.isAbyssal && !p.isUnholy && !p.useSoulPoints && (!p.realm || p.realm.id === MELVOR) && lvl(p) <= (game.prayer?.level ?? 1) && (p.pointsPerPlayer > 0 || p.pointsPerEnemy > 0 || p.pointsPerRegen > 0));
+    const PRAYER_FOR = { "melvorD:Attack": /Melee Accuracy/i, "melvorD:Strength": /Melee Maximum Hit/i, "melvorD:Ranged": /Ranged (Accuracy|Maximum)/i, "melvorD:Magic": /Magic (Accuracy|Maximum|Damage)/i };
+    const autoPrayer = (skill) => { const re = PRAYER_FOR[skill?.id] ?? /Evasion|Damage Reduction/i; return usablePrayers().filter((p) => re.test(prayerDesc(p))).sort((a, b) => lvl(b) - lvl(a))[0] ?? null; };
+    const fightPrayer = (e) => (!e?.prayer ? null : e.prayer === "auto" ? autoPrayer(skillById(e.skillId)) : list(game.prayers).find((p) => p.id === e.prayer && lvl(p) <= (game.prayer?.level ?? 1)) ?? null);
+    const lastPrayer = () => stored(FIGHT_PRAYER) ?? "";
+    const rememberPrayer = (v) => store(FIGHT_PRAYER, v ?? "");
+    const prayerOptions = (skill, cur) => {
+      const auto = autoPrayer(skill), opts = [["", "Off"], ["auto", `Automatic${auto ? `: ${nm(auto)}` : " (nothing for this at your level yet)"}`],
+        ...usablePrayers().map((p) => [p.id, `${nm(p)}: ${prayerDesc(p) || "no bonus"} (${prayerCost(p)})`])];
+      return opts.map(([v, l]) => `<option value="${esc(v)}"${v === (cur ?? "") ? " selected" : ""}>${esc(l)}</option>`).join("");
+    };
+
     // bones a fight drops sit in the loot window until the fight ends, so pick them up first
     const lootBones = () => {
       const loot = game.combat?.loot;
@@ -1126,16 +1146,18 @@ export function setup(ctx) {
       return null;
     };
     // checked every second while a fight runs: runes, ammo and prayer points can run out
-    const fightCheck = (skill, m) => {
+    const fightCheck = (skill, m, e) => {
       const pl = player(), sp = pl.spellSelection.attack;
-      // Prayer: when points run low, pick up the bones this fight dropped and bury them, then pray again. With none yet,
-      // keep fighting with the prayer off until some drop (only a monster with no bones stops the step).
-      if (skill.id === PRAYER) {
-        const pr = bestPrayer(), cost = Math.max(1, pr?.pointsPerPlayer ?? 1);
+      // A prayer (Prayer goals, or one picked for this fight): when points run low, pick up the bones the fight dropped and
+      // bury them, then pray again. With none yet, keep fighting with the prayer off until some drop. Only a Prayer goal
+      // against a monster with no bones stops.
+      const pr = skill.id === PRAYER ? bestPrayer() : fightPrayer(e);
+      if (pr) {
+        const cost = Math.max(1, pr.pointsPerPlayer || pr.pointsPerEnemy || pr.pointsPerRegen || 1);
         if (pl.prayerPoints < cost) buryBones();
-        if (pr && pl.prayerPoints >= cost && !pl.activePrayers.has(pr)) try { pl.togglePrayer(pr); } catch (e) { /* not allowed right now */ }
-        if (!(pl.prayerPoints > 0) && !m?.bones?.item && !bones()) return { why: "out of prayer points, with no bones left to bury" };
+        if (pl.prayerPoints >= cost && !pl.activePrayers.has(pr)) try { pl.togglePrayer(pr); } catch (err) { /* not allowed right now */ }
       }
+      if (skill.id === PRAYER && !(pl.prayerPoints > 0) && !m?.bones?.item && !bones()) return { why: "out of prayer points, with no bones left to bury" };
       if (pl.attackType === "ranged" && !(pl.equipment.equippedItems["melvorD:Quiver"]?.quantity > 0)) return { why: "out of ammo" };
       if (pl.attackType === "magic" && sp && !pl.getRuneCosts(sp).every((k) => owned(k.item) >= k.quantity)) return { why: "out of runes", noMaterials: true };
       return null;
@@ -1165,13 +1187,13 @@ export function setup(ctx) {
     // first room until it's down (the game starts the next run by itself when it ends)
     const isRun = (area) => !!area && ["dungeons", "strongholds", "abyssDepths"].some((k) => list(game[k]).includes(area));
     const fighting = (m, area) => game.activeAction === game.combat && (isRun(area) ? game.combat.selectedArea === area : game.combat.selectedMonster === m);
-    const startFight = (skill, m, area) => {
-      const pl = player(), style = styleFor(skill), pr = skill.id === PRAYER && bestPrayer();
+    const startFight = (skill, m, area, e) => {
+      const pl = player(), style = styleFor(skill), pr = skill.id === PRAYER ? bestPrayer() : fightPrayer(e);
       if (game.activeAction && !fighting(m, area)) game.stopActiveAction();
       savedCombat ??= { type: pl.attackType, style: pl.attackStyles[pl.attackType], prayers: [...pl.activePrayers] };
       if (style && pl.attackStyles[pl.attackType] !== style) pl.setAttackStyle(pl.attackType, style);
       if (pr && !(pl.prayerPoints > 0)) buryBones();
-      if (pr && !pl.activePrayers.has(pr)) pl.togglePrayer(pr);
+      if (pr && pl.prayerPoints > 0 && !pl.activePrayers.has(pr)) try { pl.togglePrayer(pr); } catch (err) { /* not allowed right now */ }
       if (!fighting(m, area)) game.combat.selectMonster(m, area);
     };
     const fightMethods = (skill) => [...list(game.combatAreas), ...list(game.slayerAreas)].filter(realmOk).flatMap((area) => (area.monsters ?? []).filter((m) => realmOk(m) && m.levels).map((m) => {
@@ -1190,7 +1212,7 @@ export function setup(ctx) {
         // a combat spell uses runes on every cast
         get options() { const pl = player(), sp = pl.spellSelection.attack; return pl.attackType === "magic" && sp ? [{ costs: pl.getRuneCosts(sp).map((k) => ({ item: k.item, quantity: k.quantity * ev().attacks })), mult: 1 }] : NO_COSTS; },
         dungeon: run, // a Township task can send you here, but training goals don't (their XP numbers would be off)
-        need: () => fightNeed(skill, m, area), check: () => fightCheck(skill, m), active: () => fighting(m, area), start: () => startFight(skill, m, area),
+        need: () => fightNeed(skill, m, area), check: (e) => fightCheck(skill, m, e), active: () => fighting(m, area), start: (e) => startFight(skill, m, area, e),
         // e is the queue step: a fight you said you'd eat yourself for skips the auto eat check
         safe: (e) => {
           const hit = ev().hit, mode = e?.selfEat ? "self" : parts.noAutoEat?.() ? "noAuto" : null;
@@ -1828,12 +1850,13 @@ export function setup(ctx) {
       check: (e) => {
         const m = methodOf(e), s = m?.safe?.(e);
         if (s && !s.ok) return { why: `not safe while you're away: ${s.why}` };
-        return m?.check?.() ?? null;
+        return m?.check?.(e) ?? null;
       },
       running: (e) => { const sk = skillById(e.skillId), m = methodOf(e); return m?.active ? m.active() : !!sk && sk.isActive && game.activeAction === sk; },
       foreign: (e) => { const m = methodOf(e), actor = m?.actor ?? skillById(e.skillId); return !!game.activeAction && (game.activeAction !== actor || (!!m?.active && !m.active())); },
       restock: (e) => restockCraft(e),
-      plan: (e) => nextBatch(e),
+      // a goal's prayer choice goes on the fights it plans
+      plan: (e) => { const r = nextBatch(e); if (r.ok && e.prayer) for (const x of r.entries ?? []) if (String(x.actionId ?? "").startsWith("fight:")) x.prayer = e.prayer; return r; },
       trainFinished: (e) => restoreSet(e),
       // a survey step on the way to a dig site is done once its hex is
       done: (e) => { if (e.actionId !== "cartography:survey" || e.hexQ === undefined) return false; const h = hexOf(e); if (h && !h.isFullySurveyed) return false; closePoiPop(); return true; },
@@ -1857,7 +1880,8 @@ export function setup(ctx) {
     // messages show the icon of the skill picked in the window
     const tellPlayer = (m) => A.tell(m, skillById(TS.skillId));
     const dupHtml = (entries) => A.queue.dupHtml(entries);
-    const TS = { skillId: null, goal: "level", make: null, qty: 100, level: null, forced: "", sell: false };
+    const TS = { skillId: null, goal: "level", make: null, qty: 100, level: null, forced: "", sell: false, prayer: "" };
+    const praysIn = (sk) => !!sk && COMBAT.has(sk.id) && sk.id !== PRAYER && usablePrayers().length > 0;
     const fixTrain = () => {
       let sk = skillById(TS.skillId);
       if (!isTrainable(sk)) { const open = skillById(game.openPage?.id); sk = isTrainable(open) ? open : trainSkills()[0]; TS.skillId = sk?.id ?? null; }
@@ -1883,6 +1907,7 @@ export function setup(ctx) {
             field("Amount", numberInput("mst-tr-qty", TS.qty, 'min="1"'))
           : field("Target level", numberInput("mst-tr-level", TS.level, `min="${sk.level + 1}" max="${levelCap(sk)}"`)) +
             field("Method", select("mst-tr-method", opt("", "Best available (recommended)", !TS.forced) + trainCands(sk).map((c) => opt(c.a.id, `${nm(c.a)} (about ${num(Math.round(c.rate))} XP/h)`, c.a.id === TS.forced)).join(""))) +
+            (praysIn(sk) ? field("Prayer", select("mst-tr-prayer", prayerOptions(sk, TS.prayer))) : "") +
             check("mst-tr-sell", TS.sell, "Sell the items it makes") + check("mst-tr-mastery", mastery(), "Prefer mastery XP")) +
         `</div>`;
     };
@@ -1913,7 +1938,8 @@ export function setup(ctx) {
       const cap = levelCap(sk), L = Math.floor(TS.level || 0);
       if (!(L > sk.level) || L > cap) return nothing(sk.level >= cap ? `${nm(sk)} is already at its highest level.` : `Pick a target level between ${sk.level + 1} and ${cap}.`);
       const plan = trainPlan(sk, L, TS.forced || null), picks = sk.id === AGILITY && !TS.forced ? agilityPicks() : [];
-      const goal = [{ kind: "train", skillId: sk.id, targetLevel: L, targetXp: xpAt(L), qty: xpAt(L), forced: TS.forced || undefined, sellMade: TS.sell, label: `${nm(sk)}: reach level ${L}` }];
+      const pray = praysIn(sk) && TS.prayer ? TS.prayer : undefined;
+      const goal = [{ kind: "train", skillId: sk.id, targetLevel: L, targetXp: xpAt(L), qty: xpAt(L), forced: TS.forced || undefined, sellMade: TS.sell, prayer: pray, label: `${nm(sk)}: reach level ${L}${pray ? " (with prayer)" : ""}` }];
       // an empty course can still take a goal: it builds first, then runs
       if (!plan.batches.length && picks.length) return { html: dupHtml(goal) + courseHtml(picks) + note("Your course is empty, so this goal builds it first and then runs it."), entries: goal };
       const first = !TS.forced && goalFirst(sk);
@@ -1962,6 +1988,7 @@ export function setup(ctx) {
       "mst-tr-method": (el) => { TS.forced = el.value; },
       "mst-tr-sell": (el) => { TS.sell = el.checked; },
       "mst-tr-mastery": (el) => { Settings.set("preferMastery", el.checked); },
+      "mst-tr-prayer": (el) => { TS.prayer = el.value; rememberPrayer(el.value); },
     };
     const onTrainEvent = (popup, ev) => {
       const el = ev.target, fn = FIELDS[el?.id];
@@ -1971,7 +1998,7 @@ export function setup(ctx) {
       if (prev) prev.innerHTML = trainBuild().html;
     };
     const openTrain = () => {
-      Object.assign(TS, { skillId: null, make: null, level: null, forced: "" });
+      Object.assign(TS, { skillId: null, make: null, level: null, forced: "", prayer: lastPrayer() });
       fixTrain();
       if (!TS.skillId) return;
       SwalLocale.fire({
@@ -1991,6 +2018,7 @@ export function setup(ctx) {
     const API = {
       version: VERSION, settings: Settings, mastery,
       skills: { list: trainSkills, byId: skillById, isTrainable, methodsOf, methodById, makeables, stepFor, xpRate, levelCap, xpAt, levelIn, COMBAT, WEAPON },
+      prayers: { options: prayerOptions, auto: autoPrayer, usable: usablePrayers, last: lastPrayer, remember: rememberPrayer, forEntry: fightPrayer },
       items: { crafter, gatherer, shopOnly, buyLeft, potionGap, upgradeOf, upgradeCost, upgrades: () => upgradeList().map(upgradeMethod), UPGRADE, index: () => index() },
       plan: { buildRows, rowsFor, toEntries, materialSteps, makeTime, acquire, itemMissing, missingHtml, itemSection, rowsMs, trainCands, trainPlan, bestDetour, blockedWhy, goalFirst, agilityPicks, buildSteps, nextBatch },
       fightId, HITPOINTS,
@@ -2784,7 +2812,14 @@ export function setup(ctx) {
 
   // Fights the queue won't run on its own (auto eat too low, for one) can still go in the queue if you tick the box saying
   // you'll stay and eat yourself. A hit that kills from full HP, or no food at all, can't be fixed that way.
-  const Fight = { selfEat: false };
+  const Fight = { selfEat: false, prayer: "" };
+  // the prayer to use in a monster task's fight (the training part keeps the list and remembers the choice)
+  const prayerSection = () => {
+    const P = st()?.prayers;
+    if (!P?.usable().length) return "";
+    return `<div class="mbd-step"><div class="mbd-stepno">Prayer</div><div class="mbd-chips"><select data-mbd-prayer class="custom-select custom-select-sm" style="max-width:100%;width:auto">${P.options(skillById(HITPOINTS), Fight.prayer)}</select></div>` +
+      `<div class="mbd-note">The queue turns it on for this fight, and buries the bones the fight drops to keep it going.</div></div>`;
+  };
   const fightMethod = (m) => { const id = st().fightId(m); return id ? st().skills.methodById(skillById(HITPOINTS), id) : null; };
   const queueSafety = (m, self = false) => { try { return fightMethod(m)?.safe?.(self ? { selfEat: true } : undefined) ?? { ok: true }; } catch (e) { return { ok: true }; } };
   const selfEatSection = (m) => {
@@ -2826,7 +2861,7 @@ export function setup(ctx) {
       (typeof m.media === "string" ? `<img src="${esc(m.media)}" style="width:56px;height:56px;object-fit:contain;display:block;margin:0 auto 4px">` : "") +
       `<b>${esc(nm(m))}</b>${kills ? ` &times;${num(kills)}` : ""}</div>` +
       `<div class="mbd-chips">${chips.join("")}</div></div>` +
-      combatSection(m) + gearSection() + selfEatSection(m) +
+      combatSection(m) + gearSection() + prayerSection() + selfEatSection(m) +
       `<div class="mbd-sec">Location:</div>` +
       (places.length
         ? places.slice(0, 8).join("") + (places.length > 8 ? `<div class="mbd-place">+${places.length - 8} more</div>` : "")
@@ -2874,6 +2909,7 @@ export function setup(ctx) {
         syncFight(popup);
         popup?.addEventListener?.("change", (ev) => {
           if (ev.target?.matches?.("[data-mbd-selfeat]")) { Fight.selfEat = ev.target.checked; syncFight(popup); return; }
+          if (ev.target?.matches?.("[data-mbd-prayer]")) { Fight.prayer = ev.target.value; st()?.prayers.remember(ev.target.value); return; }
           const fs = ev.target?.closest?.("[data-mbd-farm]");
           if (fs) {
             Farm.pick[fs.dataset.mbdFarm] = fs.value;
@@ -2967,7 +3003,8 @@ export function setup(ctx) {
     if (total ? game.stats.monsterKillCount(m) >= goal.quantity : need <= 0) return [];
     const left = total ? goal.quantity - game.stats.monsterKillCount(m) : need;
     const self = Fight.selfEat && !queueSafety(m).ok;
-    return [{ kind: "kill", monsterId: m.id, skillId: HITPOINTS, actionId: st().fightId(m) ?? `fight:none:${m.id}`, qty: left, label: `Defeat ${nm(m)}${self ? " (you eat yourself)" : ""}`, ...(self ? { selfEat: true } : {}) }];
+    const pray = Fight.prayer || undefined;
+    return [{ kind: "kill", monsterId: m.id, skillId: HITPOINTS, actionId: st().fightId(m) ?? `fight:none:${m.id}`, qty: left, label: `Defeat ${nm(m)}${self ? " (you eat yourself)" : ""}${pray ? " (with prayer)" : ""}`, ...(self ? { selfEat: true } : {}), ...(pray ? { prayer: pray } : {}) }];
   };
   const describeGoal = (goal) => {
     const type = goal?.constructor?.name;
@@ -3030,7 +3067,7 @@ export function setup(ctx) {
       ev.preventDefault();
       ev.stopPropagation();
       try {
-        Astro.pick = "best"; Farm.pick = {}; Fight.selfEat = false;
+        Astro.pick = "best"; Farm.pick = {}; Fight.selfEat = false; Fight.prayer = st()?.prayers.last() ?? "";
         const onQueue = info.queue && !info.blocked?.() ? (top) => queueSteps(info.queue(), top) : null;
         fire(info.title, () => dupHtml(info.queue?.()) + info.body(), onQueue);
       } catch (e) { console.warn("[Township Task Helper]", e); }
@@ -3131,7 +3168,7 @@ export function setup(ctx) {
     window.townshipHelper = {
       version: VERSION,
       showItem: (id, qty = 1) => {
-        Astro.pick = "best"; Farm.pick = {}; Fight.selfEat = false;
+        Astro.pick = "best"; Farm.pick = {}; Fight.selfEat = false; Fight.prayer = st()?.prayers.last() ?? "";
         const it = itemById(id);
         const miss = itemMissing(it, qty);
         fire(`${qty} x ${esc(nm(it))}`, () => (itemMissing(it, qty).length ? missingHtml(itemMissing(it, qty)) : dupHtml(toEntries(buildRows(it, qty))) + itemSection(it, qty)), miss.length || !buildRows(it, qty).length ? null : (top) => queueSteps(toEntries(buildRows(it, qty)), top));

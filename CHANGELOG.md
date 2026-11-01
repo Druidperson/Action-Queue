@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.6.0
+- You can use a prayer in any fight now. The Train window has a Prayer pick for combat skills, and so does the Township window for monster tasks. Choose Off, Automatic, or a specific prayer, each one listed with what it does and what it costs.
+- Automatic picks the best prayer you have for what you're doing: more accuracy for Attack, a bigger max hit for Strength, more evasion for Defence, Hitpoints and Township fights, and the matching ones for Ranged and Magic.
+- The queue turns the prayer on for the fight and keeps it going by burying the bones the fight drops, plus any in your bank. If you run out, it keeps fighting without the prayer until more bones drop, so it never stops a fight over prayer points.
+- It's off by default and remembers what you picked last time. Your own prayers are put back when the step ends.
+
 ## 2.5.0
 - Prayer training refills itself. When prayer points run low, the queue picks up the bones the fight dropped (they sit in the loot window until a fight ends) and buries them, then turns the prayer back on. With no points and no bones, it keeps fighting with the prayer off until some bones drop, instead of stopping.
 - A Prayer goal can start with no prayer points and an empty bank, as long as the monster drops bones.
