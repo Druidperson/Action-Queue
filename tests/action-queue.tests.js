@@ -33,7 +33,7 @@
   const T = () => window.townshipHelper;
   const Q = () => A()._dev.Queue;
   const R = () => A()._dev.Runner;
-  const SETTINGS = ["autoStart", "autoSell", "autoBuy", "sideJobs", "autoTokens"];
+  const SETTINGS = ["autoStart", "autoSell", "autoBuy", "sideJobs", "autoTokens", "autoClear"];
 
   // ---- sandbox: everything a test changes is put back afterwards ----
   // a popup counts while it's showing, not while it plays its closing animation (which can stall if the tab was hidden)
@@ -53,6 +53,7 @@
     const saved = JSON.stringify(q.items), set = Object.fromEntries(SETTINGS.map((k) => [k, a.settings.get(k)]));
     const mastery = S().settings.get("preferMastery"), gp = game.gp.amount, style = game.combat.player.attackStyles?.melee;
     q.items = []; q.save();
+    a.settings.set("autoClear", false); // most tests look at finished steps; the ones about clearing turn it on
     bankUndo = [];
     try { await fn(); }
     finally {
@@ -179,7 +180,33 @@
     give(feathers, 2); A().runner.start(); await sleep(150);
     eq(items()[0].status, "done");
   }));
-  test(RU, "an empty queue says so instead of starting", () => sandbox(() => { A().runner.start(); eq(A().runner.state, "idle"); has(R().message, "Nothing to run"); }));
+  test(RU, "with Clear finished steps on, a done step leaves the queue and the rest stay", () => sandbox(async () => {
+    A().settings.set("autoClear", true);
+    const feathers = "melvorD:Feathers", need = have(feathers) + 2;
+    add([manual(feathers, need, "Get Feathers"), manual("melvorD:Normal_Logs", have("melvorD:Normal_Logs") + 1000, "Get lots of logs")]);
+    give(feathers, 2); A().runner.start(); await sleep(200);
+    eq(items().map((e) => e.label).join(","), "Get lots of logs", "left in the queue:");
+  }));
+  test(RU, "clearing keeps a running goal's switch-gear step, and drops it once the goal is done", () => sandbox(() => {
+    A().settings.set("autoClear", true);
+    const q = Q();
+    q.items = [
+      { id: "s1", kind: "ask", what: "equip", parent: "g1", status: "done", label: "Switch to equipment set 2" },
+      { id: "b1", kind: "skill", parent: "g1", status: "done", label: "a finished batch" },
+      { id: "g1", kind: "train", skillId: "melvorD:Attack", status: "pending", label: "Attack goal" },
+      { id: "x1", kind: "manual", status: "done", label: "something else that's done" },
+    ];
+    q.autoClear();
+    eq(q.items.map((e) => e.id).join(","), "s1,g1", "kept:");
+    q.items.find((e) => e.id === "g1").status = "done"; q.autoClear();
+    eq(q.items.length, 0, "left after the goal is done:");
+    // and nothing is cleared with the setting off
+    A().settings.set("autoClear", false);
+    q.items = [{ id: "x2", kind: "manual", status: "done", label: "done" }]; q.autoClear();
+    eq(q.items.length, 1, "with it off:");
+    q.items = []; q.save();
+  }));
+  test(RU, "an empty queue says so instead of starting",() => sandbox(() => { A().runner.start(); eq(A().runner.state, "idle"); has(R().message, "Nothing to run"); }));
   test(RU, "a gather step runs until it has enough, then the queue finishes", () => sandbox(async () => {
     liveOk(); A().settings.set("autoSell", false);
     add([logStep(2)]);

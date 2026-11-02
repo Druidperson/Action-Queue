@@ -5,7 +5,7 @@
 //   3. Township tasks: the green play buttons on Township tasks, which plan a task and add its steps
 // The parts talk through `parts` below. Other mods still reach the queue as mod.api.actionQueue (or window.actionQueue).
 export function setup(ctx) {
-  const VERSION = "2.8.0";
+  const VERSION = "2.9.0";
   const parts = { aq: null, st: null, installed: false };
 
   // ======================================================================================================================
@@ -47,6 +47,8 @@ export function setup(ctx) {
         "When on, steps that need feathers, Summoning shards, compost or anything else from the shop buy it right away. When off, the queue asks you before every purchase. Agility obstacles, Slayer tasks and dig site maps always ask."],
       autoTokens: ["aq-autotokens", true, "Claim mastery tokens automatically",
       "While the queue runs, mastery tokens you get are claimed right away so they don't fill up your bank. Tokens that would go past a full mastery pool stay in your bank until there's room."],
+    autoClear: ["aq-autoclear", true, "Clear finished steps automatically",
+        "When on, a step leaves the queue as soon as it's done, so the list only shows what's left. When off, finished steps stay crossed out until you press Clear Queue."],
     sideJobs: ["aq-sidejobs", true, "Work on other steps while crops grow",
         "When on, a Farming step that is waiting for its crops lets a later step run in the meantime (gathering, or training that uses no materials), and goes back to the crops once they're ready."],
     };
@@ -183,6 +185,7 @@ export function setup(ctx) {
         try { this.items = JSON.parse(stored(this.key()) ?? "[]").filter((e) => KINDS.has(e.kind)); } catch (e) { this.items = []; }
         // the runner never survives a reload, so nothing is "in progress" any more (progress counts are kept)
         for (const e of this.items) { if (["active", "waiting", "blocked"].includes(e.status)) e.status = "pending"; for (const k of ["reason", "ack", "t0", "g0", "asking", "info", "readyAt"]) delete e[k]; }
+        this.autoClear();
         updateBadge();
       },
       save() { if (!store(this.key(), JSON.stringify(this.items))) console.warn(TAG, "could not save queue"); updateBadge(); Panel.render(); },
@@ -194,6 +197,13 @@ export function setup(ctx) {
       move(id, dir) { const i = this.pos(id), j = i + dir; if (i >= 0 && j >= 0 && j < this.items.length) { [this.items[i], this.items[j]] = [this.items[j], this.items[i]]; this.save(); } },
       toTop(id) { const i = this.pos(id); if (i > 0) { this.items.unshift(...this.items.splice(i, 1)); this.save(); } },
       clearDone() { this.items = this.items.filter((e) => e.status !== "done"); this.save(); },
+      // with "Clear finished steps" on, done steps leave the list right away. The one kept is a goal's "switch equipment
+      // set" step while that goal still runs, since stopping the goal sets it to run again.
+      autoClear() {
+        if (!Settings.get("autoClear")) return;
+        const live = new Set(this.items.filter((e) => e.status !== "done").map((e) => e.id));
+        this.items = this.items.filter((e) => e.status !== "done" || (e.kind === "ask" && e.what === "equip" && live.has(e.parent)));
+      },
       clear() { Runner.stop(); this.items = []; this.save(); },
     };
     // a goal that switched your equipment set switches it back when it's stopped or removed, not only when it's done
@@ -340,7 +350,7 @@ export function setup(ctx) {
         }
         if (got.size) goal.sold = `Sold ${num([...got.values()].reduce((t, x) => t + x.n, 0))} left over for ${[...got].map(([c, x]) => `${num(x.gp)} ${c}`).join(" + ")}`;
       },
-      finish(entry) { this.sellExtra(entry); entry.status = "done"; delete entry.reason; this.halt(this.actorOf(entry)); this.release(); Queue.save(); },
+      finish(entry) { this.sellExtra(entry); entry.status = "done"; delete entry.reason; this.halt(this.actorOf(entry)); this.release(); Queue.autoClear(); Queue.save(); },
       wait(msg) { this.message = msg; Panel.render(); },
       step() {
         if (this.state !== "running") { this.lastTick = null; return; }

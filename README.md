@@ -92,6 +92,7 @@ Tick "Sell what it makes, and what's left over at the end" in the Train window a
 - See how long is left and roughly when it'll be done
 - Move steps up, down or to the top, or remove them
 - Do this first runs a step right away without moving it in the list
+- Finished steps leave the list on their own (you can turn that off in the settings)
 - Clear Queue removes finished steps, Clear All empties the list
 - Drag the panel anywhere, it remembers where you put it
 - It won't queue the same step twice
@@ -103,6 +104,7 @@ Your queue is saved per character, so it's still there after a reload.
 - Auto-start begins the queue as soon as you add something
 - Auto-sell sells the extras a step makes, never anything you already owned
 - Buy from the shop without asking, for things like feathers, shards and compost
+- Clear finished steps automatically, so the queue only shows what's left
 - Work on other steps while crops grow, then come back for the harvest
 - Claim mastery tokens automatically while the queue runs, so they don't clog your bank. It never claims past a full mastery pool.
 - Prefer mastery XP when training a skill

@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.9.0
+- New setting, on by default: Clear finished steps automatically. A step leaves the queue as soon as it's done, so the list only shows what's left. That includes the batches a level goal plans, which used to pile up until the whole goal was done.
+- The only finished step that sticks around is a goal's "Switch to equipment set" step while that goal is still going, since stopping the goal sets it to run again. It goes once the goal is done.
+- Turn it off in the mod settings if you'd rather see what got done. Finished steps then stay crossed out until you press Clear Queue, like before.
+
 ## 2.8.0
 - The item list in the Train window is split into groups now, the same ones the game uses: Standard Bars, Bronze Gear, Iron Gear and so on for Smithing, Shortbows and Longbows for Fletching, Rings and Necklaces for Crafting. Each group is sorted by level. Woodcutting and Fishing stay one list since the game doesn't group them.
 - Switching between "Train to a level" and "Make an amount of an item", or picking a different item or skill, changes the form right away. The plan underneath fills in a moment after instead of holding the window up while it's worked out.
