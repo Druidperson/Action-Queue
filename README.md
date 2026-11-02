@@ -24,6 +24,8 @@ Open the Train window, choose a skill, then choose what you're after:
 - A level, like Smithing 40
 - An amount of an item, like 500 Bronze Bars
 
+The item list is grouped the way the game groups its recipes, like Standard Bars, Bronze Gear and Iron Gear for Smithing.
+
 Make 500 Bronze Bars and the queue mines the ore, smelts it and stops at 500. If you already have some of the ore in your bank, it uses that first.
 
 Aim for a level and it works out the best method for each stretch of the climb. It counts everything a method takes, materials included, so you never end up farming ore for hours to earn a few points of XP. It only switches methods when a clearly better one opens up. If a better method is held back by another skill, like iron bars needing Mining, it checks whether training that skill first gets you there sooner.

@@ -399,14 +399,14 @@
     const bad = [];
     for (const o of [...sel.options]) {
       const s = $("mst-tr-skill"); s.value = o.value;
-      const t0 = performance.now(); s.dispatchEvent(new Event("change", { bubbles: true })); const dt = performance.now() - t0;
-      const prev = $("mst-tr-prev")?.textContent ?? "";
+      const t0 = performance.now(); s.dispatchEvent(new Event("change", { bubbles: true })); await sleep(0); const dt = performance.now() - t0;
+      await sleep(120); const prev = $("mst-tr-prev")?.textContent ?? "";
       if (!prev.trim()) bad.push(`${o.textContent}: empty preview`);
       if (dt > 1000) bad.push(`${o.textContent}: took ${Math.round(dt)} ms to show`);
     }
     eq(bad.join("; "), "", "previews:");
     // pick Woodcutting and add it
-    const s = $("mst-tr-skill"); s.value = "melvorD:Woodcutting"; s.dispatchEvent(new Event("change", { bubbles: true })); await sleep(50);
+    const s = $("mst-tr-skill"); s.value = "melvorD:Woodcutting"; s.dispatchEvent(new Event("change", { bubbles: true })); await sleep(150);
     swalButton(".swal2-deny").click();
     await waitFor(() => items().some((e) => e.kind === "train"), 4000, 100);
     const goal = items().find((e) => e.kind === "train" && e.skillId === "melvorD:Woodcutting"); ok(goal, "no goal was added");
@@ -450,15 +450,37 @@
     ok(items.length && items.every((b) => b.querySelector("img")), "every skill should have an icon");
     const firstNon = pop.querySelectorAll(".mst-pick-items")[1].querySelector(".mst-pick-item");
     ok(!["Attack", "Strength", "Defence", "Hitpoints", "Ranged", "Magic", "Prayer", "Slayer"].includes(firstNon.querySelector("span").textContent), "a combat skill is under Non-combat");
-    const wc = items.find((b) => b.dataset.mstSkill === "melvorD:Woodcutting"); wc.click(); await sleep(150);
+    const wc = items.find((b) => b.dataset.mstSkill === "melvorD:Woodcutting"); wc.click(); await sleep(250);
     eq($("mst-tr-skill").value, "melvorD:Woodcutting", "picked:"); ok(!pop.querySelector(".mst-pick-list"), "the list should close");
     has(pop.querySelector("[data-mst-pick]").textContent, "Woodcutting"); has($("mst-tr-prev").textContent, "Woodcutting");
   }));
   test(TR, "the Train window can switch to making an item", () => sandbox(async () => {
     await openTrain();
-    const s = $("mst-tr-skill"); s.value = "melvorD:Smithing"; s.dispatchEvent(new Event("change", { bubbles: true })); await sleep(50);
-    const g = $("mst-tr-goal"); g.value = "make"; g.dispatchEvent(new Event("change", { bubbles: true })); await sleep(50);
+    const s = $("mst-tr-skill"); s.value = "melvorD:Smithing"; s.dispatchEvent(new Event("change", { bubbles: true })); await sleep(150);
+    const g = $("mst-tr-goal"); g.value = "make"; g.dispatchEvent(new Event("change", { bubbles: true })); await sleep(150);
     ok($("mst-tr-item"), "no item picker"); has($("mst-tr-prev").textContent, "Make");
+  }));
+  test(TR, "the item list is grouped by material, in the game's order", () => sandbox(async () => {
+    await openTrain();
+    const s = $("mst-tr-skill"); s.value = "melvorD:Smithing"; s.dispatchEvent(new Event("change", { bubbles: true })); await sleep(150);
+    const g = $("mst-tr-goal"); g.value = "make"; g.dispatchEvent(new Event("change", { bubbles: true })); await sleep(150);
+    const groups = [...$("mst-tr-item").querySelectorAll("optgroup")].map((o) => o.label);
+    ok(groups.length > 3, "no groups");
+    eq(groups.slice(0, 3).join(","), "Standard Bars,Bronze Gear,Iron Gear", "first groups:");
+    const bronze = [...$("mst-tr-item").querySelectorAll('optgroup[label="Bronze Gear"] option')].map((o) => o.textContent);
+    ok(bronze.length > 3 && bronze.every((t) => t.startsWith("Bronze")), `Bronze Gear holds ${bronze.join(", ")}`);
+    // Woodcutting has no groups, so it stays one list
+    const s2 = $("mst-tr-skill"); s2.value = "melvorD:Woodcutting"; s2.dispatchEvent(new Event("change", { bubbles: true })); await sleep(150);
+    const g2 = $("mst-tr-goal"); g2.value = "make"; g2.dispatchEvent(new Event("change", { bubbles: true })); await sleep(150);
+    ok($("mst-tr-item") && !$("mst-tr-item").querySelector("optgroup"), "Woodcutting shouldn't be grouped");
+  }));
+  test(TR, "switching the goal redraws the form before the plan is worked out", () => sandbox(async () => {
+    await openTrain();
+    const s = $("mst-tr-skill"); s.value = "melvorD:Smithing"; s.dispatchEvent(new Event("change", { bubbles: true })); await sleep(150);
+    const g = $("mst-tr-goal");
+    g.value = "make"; g.dispatchEvent(new Event("change", { bubbles: true }));
+    ok($("mst-tr-item"), "the item list should show straight away");
+    ok(await waitFor(() => /Make/.test($("mst-tr-prev")?.textContent ?? ""), 2000, 30), "the plan never filled in");
   }));
 
   // =================================================================================================================

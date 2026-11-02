@@ -5,7 +5,7 @@
 //   3. Township tasks: the green play buttons on Township tasks, which plan a task and add its steps
 // The parts talk through `parts` below. Other mods still reach the queue as mod.api.actionQueue (or window.actionQueue).
 export function setup(ctx) {
-  const VERSION = "2.7.2";
+  const VERSION = "2.8.0";
   const parts = { aq: null, st: null, installed: false };
 
   // ======================================================================================================================
@@ -1983,6 +1983,19 @@ export function setup(ctx) {
     const select = (id, body) => `<select id="${id}" class="custom-select custom-select-sm">${body}</select>`;
     const field = (label, html) => `<label>${label}</label>${html}`;
     const check = (id, on, text) => field(id === "mst-tr-sell" ? "Selling" : "Mastery", `<label style="opacity:1"><input id="${id}" type="checkbox"${on ? " checked" : ""}> ${text}</label>`);
+    // the items a skill makes, grouped the way the game groups its recipes (Standard Bars, Bronze Gear, Iron Gear...),
+    // in the game's order and by level inside each group. Skills without groups (Woodcutting, Fishing) stay one list.
+    const itemGroups = (sk) => {
+      const ms = makeables(sk), order = new Map(list(sk.categories).map((c, i) => [c, i])), groups = new Map();
+      for (const m of ms) { const c = m.a?.category ?? null; if (!groups.has(c)) groups.set(c, []); groups.get(c).push(m); }
+      const rank = (c) => (c && order.has(c) ? order.get(c) : 1e9);
+      return [...groups].sort(([x], [y]) => rank(x) - rank(y)).map(([c, l]) => [c ? nm(c) : "Other", l]);
+    };
+    const itemOptions = (sk) => {
+      const one = (m) => opt(m.id, `${nm(m.product)} (level ${m.level}${m.level > sk.level ? ", locked" : ""})`, m.id === TS.make);
+      const groups = itemGroups(sk);
+      return groups.length < 2 ? groups.flatMap(([, l]) => l).map(one).join("") : groups.map(([g, l]) => `<optgroup label="${esc(g)}">${l.map(one).join("")}</optgroup>`).join("");
+    };
     const numberInput = (id, value, attrs) => `<input id="${id}" type="number" ${attrs} step="1" value="${value}" class="form-control form-control-sm">`;
     const trainForm = () => {
       const sk = skillById(TS.skillId);
@@ -1990,7 +2003,7 @@ export function setup(ctx) {
         field("Skill", skillPicker(sk)) + (TS.pickOpen ? skillPickList() : "") +
         field("Goal", select("mst-tr-goal", opt("level", "Train to a level", TS.goal === "level") + (makeables(sk).length ? opt("make", "Make an amount of an item", TS.goal === "make") : ""))) +
         (TS.goal === "make"
-          ? field("Item", select("mst-tr-item", makeables(sk).map((m) => opt(m.id, `${nm(m.product)} (level ${m.level}${m.level > sk.level ? ", locked" : ""})`, m.id === TS.make)).join(""))) +
+          ? field("Item", select("mst-tr-item", itemOptions(sk))) +
             field("Amount", numberInput("mst-tr-qty", TS.qty, 'min="1"'))
           : field("Target level", numberInput("mst-tr-level", TS.level, `min="${sk.level + 1}" max="${levelCap(sk)}"`)) +
             field("Method", select("mst-tr-method", opt("", "Best available (recommended)", !TS.forced) + trainCands(sk).map((c) => opt(c.a.id, `${nm(c.a)} (about ${num(Math.round(c.rate))} XP/h)`, c.a.id === TS.forced)).join(""))) +
@@ -2081,8 +2094,19 @@ export function setup(ctx) {
       const el = ev.target, fn = FIELDS[el?.id];
       if (!fn || (ev.type === "input" && (el.tagName === "SELECT" || el.type === "checkbox"))) return;
       if (fn(el)) { fixTrain(); popup.querySelector("#mst-tr-form").innerHTML = trainForm(); }
-      const prev = popup.querySelector("#mst-tr-prev");
-      if (prev) prev.innerHTML = trainBuild().html;
+      fillPreview(popup);
+    };
+    // The form redraws right away and the plan fills in just after the browser has drawn it, so picking from a list
+    // never looks stuck while a big plan is worked out. Quick changes in a row only plan the last one.
+    let prevJob = 0;
+    const fillPreview = (popup) => {
+      const prev = popup.querySelector("#mst-tr-prev"), job = ++prevJob;
+      if (!prev) return;
+      prev.style.opacity = "0.5";
+      let done = false;
+      const run = () => { if (done || job !== prevJob) return; done = true; prev.style.opacity = ""; prev.innerHTML = trainBuild().html; };
+      requestAnimationFrame(() => setTimeout(run, 0));
+      setTimeout(run, 60); // the game pauses animation frames when its tab is hidden
     };
     const openTrain = () => {
       Object.assign(TS, { skillId: null, make: null, level: null, forced: "", prayer: lastPrayer(), pickOpen: false });
@@ -2097,7 +2121,7 @@ export function setup(ctx) {
         didOpen: (popup) => {
           for (const t of ["input", "change"]) popup.addEventListener(t, (ev) => onTrainEvent(popup, ev));
           popup.addEventListener("click", (ev) => {
-            if (ev.target.closest?.("[data-mst-build]")) { queueBuild(); const prev = popup.querySelector("#mst-tr-prev"); if (prev) prev.innerHTML = trainBuild().html; return; }
+            if (ev.target.closest?.("[data-mst-build]")) { queueBuild(); fillPreview(popup); return; }
             const form = popup.querySelector("#mst-tr-form"), item = ev.target.closest?.("[data-mst-skill]");
             // open or close the skill list, or pick a skill from it (through the hidden select, so the usual handler runs)
             if (ev.target.closest?.("[data-mst-pick]")) { TS.pickOpen = !TS.pickOpen; if (form) form.innerHTML = trainForm(); return; }

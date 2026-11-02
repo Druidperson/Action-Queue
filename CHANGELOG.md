@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.8.0
+- The item list in the Train window is split into groups now, the same ones the game uses: Standard Bars, Bronze Gear, Iron Gear and so on for Smithing, Shortbows and Longbows for Fletching, Rings and Necklaces for Crafting. Each group is sorted by level. Woodcutting and Fishing stay one list since the game doesn't group them.
+- Switching between "Train to a level" and "Make an amount of an item", or picking a different item or skill, changes the form right away. The plan underneath fills in a moment after instead of holding the window up while it's worked out.
+
 ## 2.7.2
 - The queue and Train buttons show on every page now. On pages where the game hides the bottom-right menu (Bank, Combat, Shop, Settings and so on), they sit in the same corner on their own, then go back in the menu when you go back to a skill.
 
