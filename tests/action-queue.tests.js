@@ -450,7 +450,22 @@
     eq(ironBars(S().plan.buildRows(plate, 1000, true)), 4000, "training planner:");
     eq(ironBars(T()._dev.buildRows(plate, 1000)), 4000, "Township planner:");
   }));
-  test(TR, "the chance to make double means fewer crafts", () => stubSmith({ getDoublingChance: (o) => (a) => (a?.product?.id === "melvorD:Iron_Platebody" ? 100 : o(a)) }, () => {
+  test(TR, "with a high keep chance, running short still gets enough for a full craft", () => sandbox(() => stubSmith({ getPreservationChance: (o) => (a) => (a?.product?.id === "melvorD:Bronze_Platebody" ? 60 : o(a)) }, async () => {
+    const sm = game.smithing, m = S().skills.methodsOf(sm).find((x) => x.product?.id === "melvorD:Bronze_Platebody");
+    if (!m || m.level > sm.level) skip("Bronze Platebody is locked");
+    const bar = "melvorD:Bronze_Bar", per = m.options[0].costs.find((k) => k.item.id === bar)?.quantity ?? 5;
+    take(bar, have(bar)); give(bar, per - 2);
+    const e = { kind: "craft", skillId: sm.id, actionId: m.id, itemId: m.product.id, qty: 2, startQty: have(m.product.id), label: "t" };
+    const r = S()._dev.restockCraft(e);
+    ok(r.ok, r.reason);
+    const bars = r.entries.find((x) => x.itemId === bar);
+    ok(bars && have(bar) + bars.qty >= per, `restock tops up to ${have(bar) + (bars?.qty ?? 0)} bars, a craft needs ${per}`);
+    // and the planners plan at least one craft's worth too
+    const plate = item(m.product.id);
+    ok((S().plan.buildRows(plate, 1, true).find((x) => x.item.id === bar)?.qty ?? 0) + have(bar) >= per, "training planner plans too few bars for one");
+    ok((T()._dev.buildRows(plate, 1).find((x) => x.item.id === bar)?.qty ?? 0) + have(bar) >= per, "Township planner plans too few bars for one");
+  })));
+  test(TR, "the chance to make double means fewer crafts",() => stubSmith({ getDoublingChance: (o) => (a) => (a?.product?.id === "melvorD:Iron_Platebody" ? 100 : o(a)) }, () => {
     const plate = item("melvorD:Iron_Platebody");
     eq(ironBars(S().plan.buildRows(plate, 1000, true)), 2500, "bars for 1,000 with every craft doubled:");
   }));

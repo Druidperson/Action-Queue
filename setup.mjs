@@ -5,7 +5,7 @@
 //   3. Township tasks: the green play buttons on Township tasks, which plan a task and add its steps
 // The parts talk through `parts` below. Other mods still reach the queue as mod.api.actionQueue (or window.actionQueue).
 export function setup(ctx) {
-  const VERSION = "2.9.0";
+  const VERSION = "2.9.1";
   const parts = { aq: null, st: null, installed: false };
 
   // ======================================================================================================================
@@ -849,6 +849,9 @@ export function setup(ctx) {
     const dblChance = (skill, a) => Math.min(1, live("dbl", skill, a, () => (skill.getDoublingChance ? skill.getDoublingChance(a) / 100 : 0), 0));
     // the share of a craft's materials it really uses up, on average
     const useOf = (m) => (typeof m?.use === "number" ? m.use : 1);
+    // how much of a material `crafts` attempts take on average, but never less than one full attempt's worth: the game
+    // won't start a craft with 4 of the 5 bars it needs, however likely it is to keep them
+    const needFor = (per, crafts, use = 1) => (crafts > 0 ? Math.max(per, Math.ceil(per * crafts * use)) : 0);
     const method = (skill, a, over = {}) => Object.defineProperties({
       id: a.id, skill, a, name: nm(a), get xp() { return realXp(skill, a); }, get use() { return 1 - keepChance(skill, a); }, get dbl() { return dblChance(skill, a); },
       get level() { return lvl(a); }, get media() { return a.media ?? this.product?.media; }, get product() { return a.product ?? null; }, get qty() { return a.baseQuantity ?? 1; },
@@ -1393,7 +1396,7 @@ export function setup(ctx) {
         if (n.recipe) {
           const { c, opt } = n.recipe;
           n.recipe.crafts = Math.ceil(n.qty / perAttempt(c.a, opt));
-          if (n.qty > 0) for (const k of opt.costs) demand.set(k.item.id, (demand.get(k.item.id) ?? 0) + Math.ceil(k.quantity * n.recipe.crafts * useOf(c.a)));
+          if (n.qty > 0) for (const k of opt.costs) demand.set(k.item.id, (demand.get(k.item.id) ?? 0) + needFor(k.quantity, n.recipe.crafts, useOf(c.a)));
         }
         if (n.qty > 0) rows.push(n);
       }
@@ -1478,7 +1481,7 @@ export function setup(ctx) {
     });
     // the steps that get the missing materials for `crafts` more attempts; null if the queue can't get one of them
     const materialSteps = (costs, crafts, parent, use = 1) => {
-      const targets = costs.map((k) => [k.item, Math.ceil(k.quantity * crafts * use) - owned(k.item)]).filter(([, n]) => n > 0);
+      const targets = costs.map((k) => [k.item, needFor(k.quantity, crafts, use) - owned(k.item)]).filter(([, n]) => n > 0);
       const entries = targets.length ? toEntries(rowsFor(targets, true)) : [];
       if (entries.some((x) => x.kind === "manual")) return null;
       for (const x of entries) x.parent = parent;
@@ -2387,11 +2390,13 @@ export function setup(ctx) {
     n.recipe = { c, opt, crafts, use };
     path.add(item.id);
     for (const cost of [...baseCosts(c.a), ...opt.costs]) {
-      if (cost?.item) explode(cost.item, Math.ceil(cost.quantity * crafts * use), depth + 1, path, nodes);
+      if (cost?.item) explode(cost.item, needFor(cost.quantity, crafts, use), depth + 1, path, nodes);
     }
     path.delete(item.id);
   };
 
+  // never less than one full craft's worth, however likely the game is to keep the materials (it won't start a craft short)
+  const needFor = (per, crafts, use = 1) => (crafts > 0 ? Math.max(per, Math.ceil(per * crafts * use)) : 0);
   const num = (n) => Number(n).toLocaleString();
   const chip = (html, cls = "", title = "") => `<span class="mbd-chip ${cls}"${title ? ` title="${esc(title)}"` : ""}><span>${html}</span></span>`;
   const where = (x) => `${esc(nm(x.skill))}: ${esc(nm(x.a))} (Lv ${x.a.level ?? 1})`;
@@ -2763,7 +2768,7 @@ export function setup(ctx) {
         n.recipe = { c, opt, crafts, use };
         if (make > 0) {
           for (const cost of [...baseCosts(c.a), ...opt.costs]) {
-            if (cost?.item) demand.set(cost.item.id, (demand.get(cost.item.id) ?? 0) + Math.ceil(cost.quantity * crafts * use));
+            if (cost?.item) demand.set(cost.item.id, (demand.get(cost.item.id) ?? 0) + needFor(cost.quantity, crafts, use));
           }
         }
       }

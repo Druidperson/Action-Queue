@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.9.1
+- Fixed: a level goal could stop with "not enough materials (or level too low)" near the end of a batch, once your chance to keep materials got high. The queue counted on keeping some of the bars and only topped you up to 4 when a platebody needs 5, and the game won't start a craft that's short. It now always gets enough for at least one full craft, in the Train window and in Township plans too.
+
 ## 2.9.0
 - New setting, on by default: Clear finished steps automatically. A step leaves the queue as soon as it's done, so the list only shows what's left. That includes the batches a level goal plans, which used to pile up until the whole goal was done.
 - The only finished step that sticks around is a goal's "Switch to equipment set" step while that goal is still going, since stopping the goal sets it to run again. It goes once the goal is done.
