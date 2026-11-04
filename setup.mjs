@@ -680,7 +680,7 @@ export function setup(ctx) {
       .mst-pick-item small{margin-left:auto;opacity:.65}
       .aq-form label{margin:0;font-size:13px;opacity:.85} .aq-form select,.aq-form input[type=number]{width:100%}
       .aq-swal .swal2-actions{display:flex;justify-content:center;align-items:center;gap:5px;flex-wrap:nowrap;margin:1em auto 0}
-      .aq-swal .swal2-actions :is(.swal2-deny,.swal2-cancel,.swal2-confirm){height:36px!important;padding:0 16px!important;font-size:14px!important;line-height:1!important;box-sizing:border-box!important;
+      .aq-swal .swal2-actions :is(.swal2-deny,.swal2-cancel,.swal2-confirm):not([style*="display: none"]){height:36px!important;padding:0 16px!important;font-size:14px!important;line-height:1!important;box-sizing:border-box!important;
         display:inline-flex!important;align-items:center!important;justify-content:center!important;box-shadow:none!important;outline:none!important;margin:0!important}
       .aq-swal .swal2-deny{order:1} .aq-swal .swal2-cancel{order:2} .aq-swal .swal2-confirm{order:3;min-width:84px!important}
       #aq-queue-panel{position:fixed;right:68px;bottom:16px;width:min(350px,calc(100% - 16px));max-height:70vh;display:none;flex-direction:column;z-index:1050;background:rgba(28,32,41,.98);color:#fff;
