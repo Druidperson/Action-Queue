@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.10.1
+- The Max upgrade window works like the Train window now. It lists every step to get there, and for the upgrade it can't do yet it lists what's in the way: the level you need ("71 Crafting required for Imbued Blue Dragonhide"), drops it can't farm and why ("Green Dragonhide: it drops from Green Dragon, which isn't safe while you're away"), how many you have of how many you need, and GP.
+- If nothing can be upgraded yet, the window shows the steps the first upgrade would take and what's missing, instead of one line.
+- Area requirements read properly now, like "finding The Eye-Conic Cave in Cartography" instead of "Cartography POIDiscovery".
+- Fixed: windows that should only have a Close button showed Add to queue and Add to top too.
+
 ## 2.10.0
 - New Make 1 button next to Create on the Smithing, Fletching, Crafting, Runecrafting, Herblore and Summoning screens. It makes just one of whatever you have selected, instead of crafting until you run out. If you're missing materials it gets them first, like mining and smelting the bars for a Rune Helmet. If the queue was stopped, it stops again once the item is made. If it was running, it makes the item and then goes back to what it was doing. If you get lucky and make 2, you keep both.
 - New Max upgrade button in the bank, under Upgrade Item. It follows the item's upgrade chain as far as you can go right now, like Rune Platebody to (S) and then (G), and gets the bars it needs on the way. The window shows the plan, the total cost, and why it stops where it does (say, Gold Bars need 40 Smithing, or you don't have enough GP for every step). Each upgrade still asks before it spends anything.

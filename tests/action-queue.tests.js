@@ -489,12 +489,12 @@
     eq(S().upChain(rp).map((u) => u.upgradedItem.name).slice(0, 2).join(","), "(S) Rune Platebody,(G) Rune Platebody", "chain:");
     const r = S().maxUpgrade(rp);
     ok(r.to || r.stop, "it should either plan something or say why not");
-    if (r.stop) ok(/needs|can't get|costs/.test(r.stop.why), `odd reason: ${r.stop.why}`);
+    if (r.stop) ok(r.stop.miss.length || r.stop.manual.length || r.stop.short.length, "it stopped without saying why");
     // with the Silver Bars and GP in hand, (S) is always reachable
     take("melvorD:Silver_Bar"); give("melvorD:Silver_Bar", 400);
     if (game.gp.amount < 100000) skip("not enough GP for the test");
     const r2 = S().maxUpgrade(rp);
-    ok(r2.to, `nothing planned: ${r2.stop?.why}`);
+    ok(r2.to, `nothing planned: ${JSON.stringify(r2.stop?.miss ?? r2.stop?.manual?.map((x) => x.why))}`);
     ok(r2.steps >= 1 && r2.entries.some((e) => e.kind === "ask" && e.what === "upgrade"), "no upgrade step");
     ok([...r2.cost.values()].some((n) => n >= 100000), "the GP cost should show");
   }));
