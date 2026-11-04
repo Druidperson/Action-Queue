@@ -2824,6 +2824,10 @@ export function setup(ctx) {
       if (r.type === "DungeonCompletion") return `${nm(r.dungeon)} completed${r.count > 1 ? ` ${r.count} times` : ""}`;
       if (r.type === "ShopPurchase") return `${nm(r.purchase)} (from the shop)`;
       if (r.type === "SlayerItem") return `${nm(r.item)} equipped`;
+      if (r.type === "CartographyPOIDiscovery") return `finding ${(r.pois ?? []).map(nm).join(" and ") || "a place"} in Cartography`;
+      if (r.type === "ItemFound") return `finding ${nm(r.item)}`;
+      if (r.type === "AbyssDepthCompletion") return `${nm(r.depth)} completed${r.count > 1 ? ` ${r.count} times` : ""}`;
+      if (r.type === "AbyssalLevel") return `${r.level} Abyssal ${nm(r.skill)}`;
     } catch (e) { /* fall through */ }
     return String(r.type ?? "an unmet requirement").replace(/([a-z])([A-Z])/g, "$1 $2");
   };
