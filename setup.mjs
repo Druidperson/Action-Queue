@@ -5,7 +5,7 @@
 //   3. Township tasks: the green play buttons on Township tasks, which plan a task and add its steps
 // The parts talk through `parts` below. Other mods still reach the queue as mod.api.actionQueue (or window.actionQueue).
 export function setup(ctx) {
-  const VERSION = "2.10.0";
+  const VERSION = "2.10.1";
   const parts = { aq: null, st: null, installed: false };
 
   // ======================================================================================================================
@@ -2205,22 +2205,29 @@ export function setup(ctx) {
         out.push(u); seen.add((cur = u.upgradedItem));
       }
     };
-    // the furthest upgrade the queue can get you to: levels met, everything gettable, and enough GP (or other currency) for
-    // every upgrade on the way. Also says what stops the next one.
+    // what's in the way of an upgrade: levels, things the queue can't get (and why), and GP for every upgrade on the way
+    let explainSource = null;
+    const blockers = (to, spend) => {
+      const miss = itemMissing(to, 1, true);
+      const manual = miss.length ? [] : toEntries(buildRows(to, 1, true)).filter((x) => x.kind === "manual").map((x) => {
+        const it = itemById(x.itemId);
+        let why = null; try { why = explainSource?.(it) ?? null; } catch (e) { /* no reason known */ }
+        return { item: it, need: x.qty, have: owned(it), why };
+      });
+      const short = [...spend].filter(([c, n]) => (c.amount ?? 0) < n);
+      return miss.length || manual.length || short.length ? { miss, manual, short } : null;
+    };
+    const blockHtml = (b) => [
+      ...b.miss.map((x) => chip(`${warnIcon}${esc(x.text)} required for ${esc(x.forName)}`, "warn")),
+      ...b.manual.map((x) => chip(`${warnIcon}${icon(x.item)}${esc(nm(x.item))}: ${esc(x.why ?? "the queue doesn't know where to get it")}${x.need > 1 ? ` (you have ${num(x.have)} of ${num(x.need)})` : ""}`, "warn")),
+      ...b.short.map(([c, n]) => chip(`${warnIcon}It costs ${num(n)} ${esc(nm(c))} to get this far, you have ${num(c.amount ?? 0)}`, "warn")),
+    ].map((c) => chips(c)).join("");
+    // the furthest upgrade the queue can get you to, and what stops the one after it
     const maxUpgrade = (item) => {
       const chain = upChain(item);
       const spend = (i) => { const t = new Map(); for (const u of chain.slice(0, i + 1)) for (const k of u.currencyCosts ?? []) t.set(k.currency, (t.get(k.currency) ?? 0) + k.quantity); return t; };
-      const why = (i) => {
-        const to = chain[i].upgradedItem, miss = itemMissing(to, 1, true);
-        if (miss.length) return `it needs ${miss.map((x) => `${x.text} for ${x.forName}`).join(", ")}`;
-        const entries = toEntries(buildRows(to, 1, true)), man = entries.filter((x) => x.kind === "manual");
-        if (man.length) return `the queue can't get ${man.map((x) => x.label.replace(/^Get /, "")).join(", ")} on its own`;
-        const short = [...spend(i)].filter(([c, n]) => (c.amount ?? 0) < n);
-        if (short.length) return `it costs ${short.map(([c, n]) => `${num(n)} ${nm(c)}`).join(" + ")} in all and you have ${short.map(([c]) => `${num(c.amount ?? 0)} ${nm(c)}`).join(" + ")}`;
-        return null;
-      };
       let best = -1, stop = null;
-      for (let i = 0; i < chain.length; i++) { const w = why(i); if (w) { stop = { to: chain[i].upgradedItem, why: w }; break; } best = i; }
+      for (let i = 0; i < chain.length; i++) { const b = blockers(chain[i].upgradedItem, spend(i)); if (b) { stop = { to: chain[i].upgradedItem, ...b }; break; } best = i; }
       if (best < 0) return { chain, stop, entries: [] };
       const to = chain[best].upgradedItem, rows = buildRows(to, 1, true);
       return { chain, stop, to, rows, entries: toEntries(rows), cost: spend(best), steps: best + 1 };
@@ -2229,20 +2236,29 @@ export function setup(ctx) {
       if (!item) return A.tell("Pick an item in your bank first.");
       const r = maxUpgrade(item);
       if (!r.chain.length) return A.tell(`${nm(item)} has nothing to upgrade to.`);
-      const stopHtml = r.stop ? note(`${esc(nm(r.stop.to))} is the next one, but ${esc(r.stop.why)}.`) : "";
-      if (!r.to) return SwalLocale.fire({ title: "Max upgrade", html: `<div class="text-center font-size-sm aq-pop">${step(`<div class="aq-title">${icon(item)}<b>${esc(nm(item))}</b></div>`)}${stopHtml}</div>` });
-      const cost = [...r.cost].map(([c, n]) => chip(`${num(n)} ${esc(nm(c))}`)).join("");
-      const head = step(`<div class="aq-title">${icon(item)}<b>${esc(nm(item))}</b> <i class="fa fa-arrow-right mx-1"></i> ${icon(r.to)}<b>${esc(nm(r.to))}</b></div>` +
-        chips(chip(plural(r.steps, "upgrade"), "ok"), ...(cost ? [chip("<b>Costs</b>", "lbl"), cost] : [])));
+      const title = (lbl, it) => `<div class="aq-stepno">${lbl}</div><div class="aq-title">${icon(it)}<b>${esc(nm(it))}</b></div>`;
+      let html;
+      if (r.to) {
+        const cost = [...r.cost].map(([c, n]) => chip(`${num(n)} ${esc(nm(c))}`)).join("");
+        html = A.queue.dupHtml(r.entries) +
+          step(`<div class="aq-title">${icon(item)}<b>${esc(nm(item))}</b> <i class="fa fa-arrow-right mx-1"></i> ${icon(r.to)}<b>${esc(nm(r.to))}</b></div>` +
+            chips(chip(plural(r.steps, "upgrade"), "ok"), ...(cost ? [chip("<b>Costs</b>", "lbl"), cost] : []))) +
+          itemSection(r.rows) +
+          (r.stop ? step(title("Can't go further yet", r.stop.to) + blockHtml(r.stop)) : step(chips(chip("That's as far as this item goes", "ok"))));
+      } else {
+        // nothing you can do yet: the steps the first upgrade takes, and what's in the way
+        html = step(title("Can't upgrade yet", r.stop.to) + blockHtml(r.stop)) +
+          (r.stop.miss.length ? "" : itemSection(buildRows(r.stop.to, 1, true)));
+      }
+      html += note(r.to ? "Each upgrade asks you before it spends anything." : "Once these are sorted out, Max upgrade can add it to the queue.");
       SwalLocale.fire({
-        title: "Max upgrade", width: 620,
-        html: `<div class="text-center font-size-sm aq-pop">${A.queue.dupHtml(r.entries)}${head}${itemSection(r.rows)}${stopHtml}${note("Each upgrade asks you before it spends anything.")}</div>`,
-        confirmButtonText: "Close", showDenyButton: true, denyButtonText: '<i class="fa fa-play mr-1"></i>Add to queue',
-        showCancelButton: true, cancelButtonText: '<i class="fa fa-arrow-up mr-1"></i>Add to top',
+        title: "Max upgrade", width: 620, html: `<div class="text-center font-size-sm aq-pop">${html}</div>`,
+        confirmButtonText: "Close", showDenyButton: !!r.to, denyButtonText: '<i class="fa fa-play mr-1"></i>Add to queue',
+        showCancelButton: !!r.to, cancelButtonText: '<i class="fa fa-arrow-up mr-1"></i>Add to top',
         customClass: { popup: "aq-swal", confirmButton: "btn btn-primary m-1", denyButton: "btn btn-success m-1", cancelButton: "btn btn-warning m-1" },
       })?.then?.((x) => {
         const top = x?.dismiss === "cancel";
-        if (!x?.isDenied && !top) return;
+        if (!r.to || (!x?.isDenied && !top)) return;
         for (const e of r.entries) if (e.itemId === r.to.id) e.label = `Max upgrade: ${nm(r.to)}`;
         const added = A.queue.add(r.entries, top);
         A.panel.open();
@@ -2263,7 +2279,7 @@ export function setup(ctx) {
       row.appendChild(x);
       if (at?.parentElement === panel) at.after(row); else panel.appendChild(row);
     };
-    Object.assign(API, { makeOne, maxUpgrade, openMaxUpgrade, upChain });
+    Object.assign(API, { makeOne, maxUpgrade, openMaxUpgrade, upChain, setExplainer: (fn) => { if (typeof fn === "function") explainSource = fn; } });
 
     const mount = () => {
       if (A) A.addButton("mst-train-btn", "Train a skill: queue an item or a level goal", "fa-chart-line", 16, () => openTrain());
@@ -2818,6 +2834,20 @@ export function setup(ctx) {
       try { if (!game.checkRequirement(r)) out.push({ text: reqText(r), forName: nm(m) }); } catch (e) { /* ignore */ }
     }
     return out;
+  };
+  // why the queue can't get an item on its own, in plain words (for windows that list what's in the way), or null
+  const sourceWhy = (item) => {
+    try {
+      const fights = farmFights(item, 1), open = fights.filter((f) => f.open).sort((a, b) => a.score - b.score);
+      if (open.length && !open.some((f) => f.safety.safe)) return `it drops from ${nm(open[0].m)}, which isn't safe while you're away (${open[0].safety.why})`;
+      const sk = farmSkills(item).filter((x) => !x.open).sort((a, b) => (a.level - a.skill.level) - (b.level - b.skill.level))[0];
+      if (sk) return `it needs ${sk.level} ${nm(sk.skill)} (${nm(sk.a)})`;
+      const lk = lockedSource(item);
+      if (lk) return `it needs ${lk}`;
+      const shut = fights.filter((f) => !f.open).map((f) => ({ f, miss: areaMissing(f.m) })).sort((a, b) => a.miss.length - b.miss.length)[0];
+      if (shut) return `it drops from ${nm(shut.f.m)}, which needs ${shut.miss.map((x) => x.text).join(" and ")}`;
+      return null;
+    } catch (e) { return null; }
   };
   // the level that opens the closest source of an item, when every source is still locked (null otherwise)
   const lockedSource = (item) => {
@@ -3391,6 +3421,7 @@ export function setup(ctx) {
     };
     // the queue can use what this mod knows about random drops when a recipe step runs short
     st().addSource((item, qty) => dropEntry(item, qty));
+    st().setExplainer?.((item) => sourceWhy(item));
     st().addBlocker?.((item) => lockedSource(item));
     aq().addAsk("open", {
       icon: (e) => itemById(e.openId),
