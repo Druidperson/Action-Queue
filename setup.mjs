@@ -5,7 +5,7 @@
 //   3. Township tasks: the green play buttons on Township tasks, which plan a task and add its steps
 // The parts talk through `parts` below. Other mods still reach the queue as mod.api.actionQueue (or window.actionQueue).
 export function setup(ctx) {
-  const VERSION = "2.9.1";
+  const VERSION = "2.10.0";
   const parts = { aq: null, st: null, installed: false };
 
   // ======================================================================================================================
@@ -322,7 +322,7 @@ export function setup(ctx) {
       // anything you owned before the step started.
       sellExtra(entry) {
         try {
-          if ((!Settings.get("autoSell") && !entry.sellAll) || (entry.kind !== "craft" && entry.kind !== "gather") || entry.startQty === undefined) return;
+          if ((!Settings.get("autoSell") && !entry.sellAll) || entry.keepExtra || (entry.kind !== "craft" && entry.kind !== "gather") || entry.startQty === undefined) return;
           const item = itemById(entry.itemId), bi = item?.sellsFor?.quantity > 0 && game.bank.items.get(item);
           if (!bi || bi.locked) return;
           const extra = Math.min(bi.quantity, bi.quantity - (entry.sellAll ? entry.base ?? entry.startQty : entry.startQty + entry.qty));
@@ -350,7 +350,12 @@ export function setup(ctx) {
         }
         if (got.size) goal.sold = `Sold ${num([...got.values()].reduce((t, x) => t + x.n, 0))} left over for ${[...got].map(([c, x]) => `${num(x.gp)} ${c}`).join(" + ")}`;
       },
-      finish(entry) { this.sellExtra(entry); entry.status = "done"; delete entry.reason; this.halt(this.actorOf(entry)); this.release(); Queue.autoClear(); Queue.save(); },
+      finish(entry) {
+        this.sellExtra(entry); entry.status = "done"; delete entry.reason; this.halt(this.actorOf(entry)); this.release();
+        // a "Make 1" started from an idle queue stops once it's made, instead of carrying on with the rest of the list
+        if (entry.stopAfter) Object.assign(this, { state: "idle", message: entry.doneNote ?? "Done", focusId: null });
+        Queue.autoClear(); Queue.save();
+      },
       wait(msg) { this.message = msg; Panel.render(); },
       step() {
         if (this.state !== "running") { this.lastTick = null; return; }
@@ -358,6 +363,7 @@ export function setup(ctx) {
         if (this.lastTick) this.elapsed += Math.min(nowT - this.lastTick, 5000);
         this.lastTick = nowT;
         for (let guard = 0; guard < 100; guard++) {
+          if (this.state !== "running") return Panel.render();
           const cur = this.current();
           if (!cur) { this.leave(); return this.setState("idle", "Queue finished"); }
 
@@ -2160,7 +2166,109 @@ export function setup(ctx) {
     };
     window.skillTrainer = API;
     parts.st = API;
-    const mount = () => { if (A) A.addButton("mst-train-btn", "Train a skill: queue an item or a level goal", "fa-chart-line", 16, () => openTrain()); };
+
+    // ----- "Make 1" on the game's crafting screens (Smithing, Fletching, Crafting, Runecrafting, Herblore, Summoning) -----
+    // The game's Create button keeps going until you run out. This one makes a single item, getting what it needs first.
+    const makeOne = (sk) => {
+      const item = sk?.selectedRecipe?.product;
+      if (!item) return A.tell("Pick something to make first.", sk);
+      const miss = itemMissing(item, 1, true);
+      if (miss.length) return A.tell(`You can't make ${nm(item)} yet: it needs ${miss.map((x) => x.text).join(", ")}.`, sk);
+      const entries = toEntries(buildRows(item, 1, true)), last = entries.find((x) => x.itemId === item.id && x.kind === "craft");
+      if (!last || entries.some((x) => x.kind === "manual")) return A.tell(`The queue can't get everything ${nm(item)} needs on its own.`, sk);
+      const idle = A.runner.state !== "running";
+      last.label = `${nm(sk)}: make 1 ${nm(item)}`;
+      // started from an idle queue, it stops once the item is made; a running queue just carries on afterwards
+      if (idle) Object.assign(last, { stopAfter: true, doneNote: `Made 1 ${nm(item)}` });
+      last.keepExtra = true; // a lucky double is yours to keep, not something to auto-sell
+      if (!A.queue.add(entries, true, sk)) return;
+      if (entries.length > 1) A.tell(`Getting what ${nm(item)} needs first, then making 1.`, sk);
+      if (idle) A.runner.start();
+    };
+    const mountMakeOne = () => {
+      for (const s of list(game.skills)) {
+        const b = s.menu?.createButton;
+        if (!b?.parentElement || b.parentElement.querySelector("[data-aq-make1]")) continue;
+        const x = Object.assign(document.createElement("button"), { type: "button", className: "btn btn-info m-2 p-2", textContent: "Make 1", title: "Make just one, getting the materials first if you need them" });
+        x.dataset.aqMake1 = "1";
+        x.addEventListener("click", () => { try { makeOne(s); } catch (e) { console.warn(TAG, "make 1", e); } });
+        b.after(x);
+      }
+    };
+
+    // ----- "Max upgrade" in the bank: follow an item's upgrade chain (Rune Platebody, then (S), (G)...) as far as you can -----
+    const upChain = (item) => {
+      const out = [], seen = new Set([item]);
+      for (let cur = item; ;) {
+        const u = (game.bank?.itemUpgrades?.get(cur) ?? []).find((x) => !x.isDowngrade && x.upgradedItem && x.itemCosts?.some((c) => c.item === cur) && x.upgradedItem.constructor?.name !== "PotionItem");
+        if (!u || seen.has(u.upgradedItem)) return out;
+        out.push(u); seen.add((cur = u.upgradedItem));
+      }
+    };
+    // the furthest upgrade the queue can get you to: levels met, everything gettable, and enough GP (or other currency) for
+    // every upgrade on the way. Also says what stops the next one.
+    const maxUpgrade = (item) => {
+      const chain = upChain(item);
+      const spend = (i) => { const t = new Map(); for (const u of chain.slice(0, i + 1)) for (const k of u.currencyCosts ?? []) t.set(k.currency, (t.get(k.currency) ?? 0) + k.quantity); return t; };
+      const why = (i) => {
+        const to = chain[i].upgradedItem, miss = itemMissing(to, 1, true);
+        if (miss.length) return `it needs ${miss.map((x) => `${x.text} for ${x.forName}`).join(", ")}`;
+        const entries = toEntries(buildRows(to, 1, true)), man = entries.filter((x) => x.kind === "manual");
+        if (man.length) return `the queue can't get ${man.map((x) => x.label.replace(/^Get /, "")).join(", ")} on its own`;
+        const short = [...spend(i)].filter(([c, n]) => (c.amount ?? 0) < n);
+        if (short.length) return `it costs ${short.map(([c, n]) => `${num(n)} ${nm(c)}`).join(" + ")} in all and you have ${short.map(([c]) => `${num(c.amount ?? 0)} ${nm(c)}`).join(" + ")}`;
+        return null;
+      };
+      let best = -1, stop = null;
+      for (let i = 0; i < chain.length; i++) { const w = why(i); if (w) { stop = { to: chain[i].upgradedItem, why: w }; break; } best = i; }
+      if (best < 0) return { chain, stop, entries: [] };
+      const to = chain[best].upgradedItem, rows = buildRows(to, 1, true);
+      return { chain, stop, to, rows, entries: toEntries(rows), cost: spend(best), steps: best + 1 };
+    };
+    const openMaxUpgrade = (item) => {
+      if (!item) return A.tell("Pick an item in your bank first.");
+      const r = maxUpgrade(item);
+      if (!r.chain.length) return A.tell(`${nm(item)} has nothing to upgrade to.`);
+      const stopHtml = r.stop ? note(`${esc(nm(r.stop.to))} is the next one, but ${esc(r.stop.why)}.`) : "";
+      if (!r.to) return SwalLocale.fire({ title: "Max upgrade", html: `<div class="text-center font-size-sm aq-pop">${step(`<div class="aq-title">${icon(item)}<b>${esc(nm(item))}</b></div>`)}${stopHtml}</div>` });
+      const cost = [...r.cost].map(([c, n]) => chip(`${num(n)} ${esc(nm(c))}`)).join("");
+      const head = step(`<div class="aq-title">${icon(item)}<b>${esc(nm(item))}</b> <i class="fa fa-arrow-right mx-1"></i> ${icon(r.to)}<b>${esc(nm(r.to))}</b></div>` +
+        chips(chip(plural(r.steps, "upgrade"), "ok"), ...(cost ? [chip("<b>Costs</b>", "lbl"), cost] : [])));
+      SwalLocale.fire({
+        title: "Max upgrade", width: 620,
+        html: `<div class="text-center font-size-sm aq-pop">${A.queue.dupHtml(r.entries)}${head}${itemSection(r.rows)}${stopHtml}${note("Each upgrade asks you before it spends anything.")}</div>`,
+        confirmButtonText: "Close", showDenyButton: true, denyButtonText: '<i class="fa fa-play mr-1"></i>Add to queue',
+        showCancelButton: true, cancelButtonText: '<i class="fa fa-arrow-up mr-1"></i>Add to top',
+        customClass: { popup: "aq-swal", confirmButton: "btn btn-primary m-1", denyButton: "btn btn-success m-1", cancelButton: "btn btn-warning m-1" },
+      })?.then?.((x) => {
+        const top = x?.dismiss === "cancel";
+        if (!x?.isDenied && !top) return;
+        for (const e of r.entries) if (e.itemId === r.to.id) e.label = `Max upgrade: ${nm(r.to)}`;
+        const added = A.queue.add(r.entries, top);
+        A.panel.open();
+        if (added && A.settings.get("autoStart") && A.runner.state !== "running") A.runner.start();
+      });
+    };
+    const mountMaxUpgrade = () => {
+      const box = typeof bankSideBarMenu !== "undefined" && bankSideBarMenu?.selectedMenu?.upgradeContainer;
+      if (!box || box.querySelector("[data-aq-maxup]")) return;
+      const x = Object.assign(document.createElement("button"), { type: "button", className: "btn btn-info", innerHTML: '<i class="fa fa-angle-double-up mr-1"></i>Max upgrade', title: "Upgrade this as far as you can, getting the materials first" });
+      x.dataset.aqMaxup = "1";
+      x.addEventListener("click", () => { try { openMaxUpgrade(game.bank.selectedBankItem?.item); } catch (e) { console.warn(TAG, "max upgrade", e); } });
+      // its own line under the game's Upgrade Item button, inside the same panel
+      const panel = box.firstElementChild ?? box;
+      let at = bankSideBarMenu.selectedMenu.upgradeButton;
+      while (at && at.parentElement && at.parentElement !== panel) at = at.parentElement;
+      const row = Object.assign(document.createElement("div"), { className: "px-3 pb-3" });
+      row.appendChild(x);
+      if (at?.parentElement === panel) at.after(row); else panel.appendChild(row);
+    };
+    Object.assign(API, { makeOne, maxUpgrade, openMaxUpgrade, upChain });
+
+    const mount = () => {
+      if (A) A.addButton("mst-train-btn", "Train a skill: queue an item or a level goal", "fa-chart-line", 16, () => openTrain());
+      try { mountMakeOne(); mountMaxUpgrade(); } catch (e) { console.warn(TAG, "adding buttons", e); }
+    };
     const install = () => {
       A = aq();
       if (!A) {

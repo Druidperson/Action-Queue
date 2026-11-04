@@ -465,6 +465,39 @@
     ok((S().plan.buildRows(plate, 1, true).find((x) => x.item.id === bar)?.qty ?? 0) + have(bar) >= per, "training planner plans too few bars for one");
     ok((T()._dev.buildRows(plate, 1).find((x) => x.item.id === bar)?.qty ?? 0) + have(bar) >= per, "Township planner plans too few bars for one");
   })));
+  test(TR, "Make 1 is on every crafting screen and makes exactly one, then stops", () => sandbox(async () => {
+    liveOk();
+    const names = list(game.skills).filter((s) => s.menu?.createButton);
+    const missing = names.filter((s) => !s.menu.createButton.parentElement.querySelector("[data-aq-make1]")).map((s) => s.name);
+    eq(missing.join(","), "", "no Make 1 button on:");
+    const sm = game.smithing, helm = item("melvorD:Bronze_Helmet"), r = sm.actions.allObjects.find((a) => a.product === helm);
+    if (r.level > sm.level) skip("Bronze Helmet is locked");
+    take("melvorD:Bronze_Helmet"); take("melvorD:Bronze_Bar"); give("melvorD:Bronze_Bar", 10);
+    add([logStep(1000)]); // something else in the queue, which Make 1 must not run into
+    sm.selectRecipeOnClick(r);
+    sm.menu.createButton.parentElement.querySelector("[data-aq-make1]").click();
+    ok(await waitFor(() => A().runner.state !== "running", 20000, 200), "it never stopped");
+    const made = have(helm); take("melvorD:Bronze_Helmet");
+    ok(made >= 1 && made <= 2, `made ${made}`);
+    eq(A().runner.state, "idle", "state:");
+    ok(items().some((e) => e.kind === "gather" && e.status === "pending"), "the other step should still be waiting");
+    ok(!game.activeAction, "something kept running");
+  }), { live: true });
+  test(TR, "Max upgrade goes as far as you can and says what stops the next one", () => sandbox(async () => {
+    const rp = item("melvorD:Rune_Platebody");
+    take("melvorD:Rune_Platebody"); give("melvorD:Rune_Platebody", 1);
+    eq(S().upChain(rp).map((u) => u.upgradedItem.name).slice(0, 2).join(","), "(S) Rune Platebody,(G) Rune Platebody", "chain:");
+    const r = S().maxUpgrade(rp);
+    ok(r.to || r.stop, "it should either plan something or say why not");
+    if (r.stop) ok(/needs|can't get|costs/.test(r.stop.why), `odd reason: ${r.stop.why}`);
+    // with the Silver Bars and GP in hand, (S) is always reachable
+    take("melvorD:Silver_Bar"); give("melvorD:Silver_Bar", 400);
+    if (game.gp.amount < 100000) skip("not enough GP for the test");
+    const r2 = S().maxUpgrade(rp);
+    ok(r2.to, `nothing planned: ${r2.stop?.why}`);
+    ok(r2.steps >= 1 && r2.entries.some((e) => e.kind === "ask" && e.what === "upgrade"), "no upgrade step");
+    ok([...r2.cost.values()].some((n) => n >= 100000), "the GP cost should show");
+  }));
   test(TR, "the chance to make double means fewer crafts",() => stubSmith({ getDoublingChance: (o) => (a) => (a?.product?.id === "melvorD:Iron_Platebody" ? 100 : o(a)) }, () => {
     const plate = item("melvorD:Iron_Platebody");
     eq(ironBars(S().plan.buildRows(plate, 1000, true)), 2500, "bars for 1,000 with every craft doubled:");

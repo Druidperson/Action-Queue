@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.10.0
+- New Make 1 button next to Create on the Smithing, Fletching, Crafting, Runecrafting, Herblore and Summoning screens. It makes just one of whatever you have selected, instead of crafting until you run out. If you're missing materials it gets them first, like mining and smelting the bars for a Rune Helmet. If the queue was stopped, it stops again once the item is made. If it was running, it makes the item and then goes back to what it was doing. If you get lucky and make 2, you keep both.
+- New Max upgrade button in the bank, under Upgrade Item. It follows the item's upgrade chain as far as you can go right now, like Rune Platebody to (S) and then (G), and gets the bars it needs on the way. The window shows the plan, the total cost, and why it stops where it does (say, Gold Bars need 40 Smithing, or you don't have enough GP for every step). Each upgrade still asks before it spends anything.
+
 ## 2.9.1
 - Fixed: a level goal could stop with "not enough materials (or level too low)" near the end of a batch, once your chance to keep materials got high. The queue counted on keeping some of the bars and only topped you up to 4 when a platebody needs 5, and the game won't start a craft that's short. It now always gets enough for at least one full craft, in the Train window and in Township plans too.
 

@@ -47,6 +47,12 @@ Woodcutting, Mining, Fishing, Cooking, Smithing, Fletching, Crafting, Runecrafti
 - Cartography makes paper from logs, or surveys the map around where you stand.
 - Archaeology digs at sites where you have a map with charges, and picks the map and your tools. With no map, the goal offers to make one first. If you haven't found a dig site yet, the goal finds one: it surveys in Cartography one hex at a time toward the closest site, travels onto it (asking first when a trip costs GP) and that discovers it.
 
+## Make 1 and Max upgrade
+
+The crafting screens (Smithing, Fletching, Crafting, Runecrafting, Herblore and Summoning) get a Make 1 button next to Create. It makes one of what you have selected and stops, getting the materials first if you need them. Handy when you just want one new helmet and not 40.
+
+In the bank, items that can be upgraded get a Max upgrade button. It takes the item as far up its upgrade chain as you can go right now, like Rune Platebody to (S) to (G), and gets the bars it needs. It tells you what stops the next upgrade, and every upgrade asks before spending GP.
+
 ## Agility course builder
 
 Pick Agility in the Train window and it shows which empty slots it can fill, with a Build my course button. An Agility goal fills them first too.
